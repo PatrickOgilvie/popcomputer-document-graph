@@ -1,6 +1,6 @@
 # @popcomputer/document-graph
 
-Schema-first document graphs for Honertia applications.
+Schema-first document graphs for Effect applications.
 
 Define document types, searchable projections, metadata, chunking, and graph
 relations once with Effect Schema. The package derives typed indexing, hybrid
@@ -41,9 +41,9 @@ response shapes.
 bun add @popcomputer/document-graph effect@^3.21.2 pg
 ```
 
-The package currently supports Effect `^3.21.2`. Honertia projects that already
-use `honertia/effect` normally satisfy this peer dependency. `pg` is needed when
-composing the included PostgreSQL adapter.
+The package currently supports Effect `^3.21.2`. Applications using
+`@popcomputer/web/effect` normally satisfy this peer dependency. `pg` is needed
+when composing the included PostgreSQL adapter.
 
 For PostgreSQL, apply
 [`migrations/postgres/0001_initial.sql`](./migrations/postgres/0001_initial.sql)
@@ -358,17 +358,22 @@ semantic and text retrieval by default. It does not index the Article first.
 Once source changes have been indexed, this operation can run for every search
 request without re-embedding content.
 
-## Honertia actions
+## Popcomputer Web actions
 
-Indexing and searching naturally belong to different Honertia actions because
-they have different triggers. Graph operations remain ordinary Effects, so
-each action only owns its HTTP boundary.
+Indexing and searching naturally belong to different Popcomputer Web actions
+because they have different triggers. Graph operations remain ordinary
+Effects, so each action only owns its HTTP boundary.
 
 ### Index after a content write
 
 ```ts
 import { Effect } from "effect"
-import { action, httpError, json, validateRequest } from "honertia/effect"
+import {
+  action,
+  httpError,
+  json,
+  validateRequest,
+} from "@popcomputer/web/effect"
 import {
   ArticleSchema,
   Articles,
@@ -417,7 +422,12 @@ relation for that Article current.
 
 ```ts
 import { Effect, Schema } from "effect"
-import { action, httpError, json, validateRequest } from "honertia/effect"
+import {
+  action,
+  httpError,
+  json,
+  validateRequest,
+} from "@popcomputer/web/effect"
 import { ArticleContent } from "./knowledge-graph.js"
 
 const SearchRequest = Schema.Struct({
@@ -460,8 +470,8 @@ application-owned. The graph can therefore be reused from actions, background
 jobs, internal services, and tool endpoints without a transport-specific
 wrapper.
 
-See [`examples/honertia-actions.ts`](./examples/honertia-actions.ts) for
-complete action examples.
+See [`examples/popcomputer-web-actions.ts`](./examples/popcomputer-web-actions.ts)
+for complete action examples.
 
 ## Design model
 
@@ -665,6 +675,68 @@ not consume candidate slots.
 
 Search returns chunks. Graph retrieval ranks a target document kind using one
 or more application-defined evidence routes.
+
+### Why similarity alone is sometimes the wrong query
+
+A graph is unnecessary when the caller only needs the passages most similar to
+a query. `WorkEvidence.search(query)` already handles that case.
+
+A graph becomes important when the document containing the best evidence is
+not the document the caller needs returned. Consider this query:
+
+> Which agency has proved it can improve customer retention?
+
+An Agency profile may only say “product and service design”. A related Work
+document may contain the much stronger evidence: “The redesigned membership
+journey increased twelve-month retention by 24%.” Searching only Agency
+profiles can miss the Agency; searching every vector can find the Work but
+returns the wrong entity. Vector similarity also cannot prove which Agency
+delivered that Work.
+
+```ts
+const directAgencyHits = yield* AgencyProfile.search(query)
+const relevantWorkHits = yield* WorkEvidence.search(query)
+const rankedAgencies = yield* FindAgencies.search(query)
+```
+
+The first search only sees Agency profile text. The second can find the decisive
+case study but returns Work hits. The named graph retrieval searches both
+routes, follows `deliveredBy` from matching Work, and returns Agency targets
+with the supporting chunks attached.
+
+```mermaid
+flowchart LR
+  Query["Which agency improves retention?"]
+  Evidence["Work evidence<br/>24% retention improvement"]
+  Agency["Agency document<br/>the result the caller needs"]
+  Query -->|"semantic or text relevance"| Evidence
+  Evidence -->|"deliveredBy relation"| Agency
+  Agency --> Result["Ranked Agency<br/>with attributed Work evidence"]
+```
+
+The two responsibilities stay deliberately separate:
+
+- search ranks text that is relevant to the query;
+- the graph follows an application-owned fact from that evidence to its target;
+- retrieval fuses contributions from direct and related evidence by target;
+- the result retains the source chunks that explain why the target ranked.
+
+The same shape appears in many domains:
+
+| Caller wants | Relevant text may live on | Authoritative relationship |
+|---|---|---|
+| An Agency | Case studies and Work outcomes | `Work -> deliveredBy -> Agency` |
+| An expert | Articles, talks, and project contributions | `Evidence -> authoredBy -> Person` |
+| A runbook | Incidents describing matching symptoms | `Incident -> mitigatedBy -> Runbook` |
+| A governing policy | A matching clause or procedure | `Section -> belongsTo -> Policy` |
+| A compatible product | Requirements and verified integrations | `Integration -> supportedBy -> Product` |
+
+These queries could be implemented with bespoke searches followed by manual
+joins. That is still a graph query, but with its route, target type, ranking,
+and evidence handling scattered through application code. A named retrieval
+policy keeps those decisions typed and reusable.
+
+### Define a target-oriented retrieval policy
 
 The complete example graph defines `Agency`, `Work`, and a `deliveredBy`
 relation. It then compiles a reusable Agency retrieval policy:
@@ -980,8 +1052,8 @@ Indexing retains actionable domain failures such as invalid projection output
 and `ProjectionIndexConflict`. Expected failures remain in the Effect error
 channel.
 
-Public I/O operations create `honertia.document_graph.*` spans containing safe
-policy attributes such as graph, document kind, projection, strategy, and
+Public I/O operations create package-owned `document_graph` spans containing
+safe policy attributes such as graph, document kind, projection, strategy, and
 limits. Queries, document IDs, content, metadata, vectors, and provider causes
 are never attached.
 
@@ -999,8 +1071,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 const StorageLive = postgresDocumentGraph({ pool })
 ```
 
-The schema defaults to `honertia_document_graph` and can be overridden through
-the adapter configuration.
+The adapter uses the SQL namespace created by the included migration. Supply a
+`schema` option when the application owns a different namespace.
 
 The included PostgreSQL implementation:
 
