@@ -56,6 +56,14 @@
   ],
   "author": "Patrick Ogilvie",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PatrickOgilvie/popcomputer-document-graph.git"
+  },
+  "homepage": "https://github.com/PatrickOgilvie/popcomputer-document-graph#readme",
+  "bugs": {
+    "url": "https://github.com/PatrickOgilvie/popcomputer-document-graph/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
