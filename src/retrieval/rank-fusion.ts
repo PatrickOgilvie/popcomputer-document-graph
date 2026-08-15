@@ -1,17 +1,19 @@
 import { Effect, Schema } from "effect"
 
 /** Positive weight assigned to one independently ranked retrieval stream. */
-export const RetrievalWeightSchema = Schema.Number.pipe(
-  Schema.finite(),
-  Schema.positive(),
-  Schema.lessThanOrEqualTo(100),
+export const RetrievalWeightSchema = Schema.Number.check(
+  Schema.isFinite(),
+  Schema.isGreaterThan(0),
+  Schema.isLessThanOrEqualTo(100),
+).pipe(
   Schema.brand("RetrievalWeight"),
 )
 
 /** Positive reciprocal-rank constant controlling rank-score decay. */
-export const ReciprocalRankConstantSchema = Schema.Number.pipe(
-  Schema.int(),
-  Schema.between(1, 10_000),
+export const ReciprocalRankConstantSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 1, maximum: 10_000 }),
+).pipe(
   Schema.brand("ReciprocalRankConstant"),
 )
 
@@ -75,7 +77,7 @@ export class InvalidRankFusionInput extends Schema.TaggedError<
   InvalidRankFusionInput
 >()("InvalidRankFusionInput", {
   stream: Schema.String,
-  reason: Schema.Literal("duplicate_key", "invalid_score"),
+  reason: Schema.Literals(["duplicate_key", "invalid_score"]),
 }) {}
 
 interface MutableFusionResult<Key extends string, Value, Signal> {

@@ -12,7 +12,7 @@ export {
   type ChunkingInput,
   type ChunkingStrategy,
   type ChunkingStrategyDescriptor,
-  type ChunkingStrategyShape,
+  type ChunkingStrategyRuntime,
   type DefineChunkerInput,
   type SectionChunkingInput,
   type SectionChunkingStrategy,
@@ -27,7 +27,7 @@ export {
   defineDocument,
   type DefineDocumentInput,
   type DocumentDefinition,
-  type DocumentDefinitionShape,
+  type RegisteredDocumentDefinition,
 } from "./document/document-definition.js"
 
 export {
@@ -190,7 +190,7 @@ export {
   type ProjectedDocument,
   type ProjectedSection,
   type VectorProjection,
-  type VectorProjectionShape,
+  type RegisteredVectorProjection,
 } from "./document/vector-projection.js"
 
 export {

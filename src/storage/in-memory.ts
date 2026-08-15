@@ -1,9 +1,9 @@
 import {
   Array as EffectArray,
   Effect,
-  Either,
   Layer,
   Option,
+  Result,
   Schema,
 } from "effect"
 import type { JsonValue } from "../document/json-value.js"
@@ -332,16 +332,18 @@ const makeInMemoryStorage = (): DocumentGraphStorageService &
           replacement,
           reusableVectors,
         )
-        if (Either.isLeft(plan)) {
-          return yield* Effect.fail(invalidReplacement(plan.left))
+        if (Result.isFailure(plan)) {
+          return yield* Effect.fail(invalidReplacement(plan.failure))
         }
 
         const nextChunks: Array<StoredChunk> = []
         for (const chunk of replacement.chunks) {
-          const vector = plan.right.vectors.get(chunk.contentHash)
+          const vector = plan.success.vectors.get(chunk.contentHash)
           if (vector === undefined) {
-            return yield* Effect.dieMessage(
-              "A planned projection replacement lost a required vector",
+            return yield* Effect.die(
+              new Error(
+                "A planned projection replacement lost a required vector",
+              ),
             )
           }
 
@@ -356,7 +358,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService &
         )
         const counts = countProjectedRevisionReplacement(
           previousIds,
-          plan.right.chunkIds,
+          plan.success.chunkIds,
         )
 
         tokenSequence += 1
@@ -469,14 +471,14 @@ const makeInMemoryStorage = (): DocumentGraphStorageService &
     replaceOutgoing: (replacement) =>
       Effect.gen(function*() {
         const plan = planOutgoingGraphRelationReplacement(replacement)
-        if (Either.isLeft(plan)) {
+        if (Result.isFailure(plan)) {
           return yield* Effect.fail(
-            invalidRelationStorage("replace_outgoing", plan.left),
+            invalidRelationStorage("replace_outgoing", plan.failure),
           )
         }
 
         const next = new Map<string, StoredGraphEdge>()
-        for (const planned of plan.right.edges) {
+        for (const planned of plan.success.edges) {
           const edge: StoredGraphEdge = {
             graph: replacement.graph,
             relation: planned.relation,

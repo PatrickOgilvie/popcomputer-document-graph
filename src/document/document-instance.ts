@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import type { JsonValue } from "./json-value.js"
-import type { DocumentDefinitionShape } from "./document-definition.js"
+import type { RegisteredDocumentDefinition } from "./document-definition.js"
 import {
   encodeDocumentId,
   makeDocumentKey,
@@ -14,7 +14,7 @@ export class InvalidDocumentValue extends Schema.TaggedError<
 >()("InvalidDocumentValue", {
   graph: Schema.String,
   documentKind: Schema.String,
-  reason: Schema.Literal("schema_rejected", "identity_rejected"),
+  reason: Schema.Literals(["schema_rejected", "identity_rejected"]),
 }) {}
 
 /** JSON-safe graph reference persisted by storage adapters. */
@@ -28,16 +28,16 @@ export interface EncodedDocumentReference {
 export interface ParsedDocumentInstance<
   GraphId extends string = string,
   Kind extends string = string,
-  Definition extends DocumentDefinitionShape = DocumentDefinitionShape,
+  Definition extends RegisteredDocumentDefinition = RegisteredDocumentDefinition,
 > {
-  readonly value: Schema.Schema.Type<Definition["value"]>
-  readonly id: Schema.Schema.Type<Definition["id"]>
+  readonly value: Definition["value"]["Type"]
+  readonly id: Definition["id"]["Type"]
   readonly encodedId: JsonValue
   readonly documentKey: DocumentKey
   readonly reference: {
     readonly graph: GraphId
     readonly kind: Kind
-    readonly id: Schema.Schema.Type<Definition["id"]>
+    readonly id: Definition["id"]["Type"]
   }
   readonly encodedReference: EncodedDocumentReference
 }
@@ -46,7 +46,7 @@ export interface ParsedDocumentInstance<
 export const parseDocumentInstance = <
   const GraphId extends string,
   const Kind extends string,
-  Definition extends DocumentDefinitionShape,
+  Definition extends RegisteredDocumentDefinition,
 >(input: {
   readonly graph: GraphId
   readonly documentKind: Kind
@@ -57,10 +57,9 @@ export const parseDocumentInstance = <
   InvalidDocumentValue | InvalidDocumentIdentity
 > =>
   Effect.gen(function*() {
-    const value = yield* Schema.validate(input.definition.value)(
-      input.value,
-      { onExcessProperty: "error" },
-    ).pipe(
+    const value = yield* Schema.decodeEffect(
+      Schema.toType(input.definition.value),
+    )(input.value, { onExcessProperty: "error" }).pipe(
       Effect.mapError(
         () =>
           new InvalidDocumentValue({
@@ -73,9 +72,9 @@ export const parseDocumentInstance = <
     const identified = yield* Effect.sync(() =>
       input.definition.identify(value),
     )
-    const id = yield* Schema.validate(input.definition.id)(identified, {
-      onExcessProperty: "error",
-    }).pipe(
+    const id = yield* Schema.decodeEffect(
+      Schema.toType(input.definition.id),
+    )(identified, { onExcessProperty: "error" }).pipe(
       Effect.mapError(
         () =>
           new InvalidDocumentValue({

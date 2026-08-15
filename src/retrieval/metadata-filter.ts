@@ -1,4 +1,8 @@
-import type { JsonValue } from "../document/json-value.js"
+import { Schema } from "effect"
+import {
+  JsonValueSchema,
+  type JsonValue,
+} from "../document/json-value.js"
 
 /** Scalar metadata value supported by storage-neutral search filters. */
 export type MetadataSearchValue = null | boolean | number | string
@@ -78,6 +82,18 @@ export interface MetadataFilterBuilder<Metadata> {
 
 const MaximumFilterLeaves = 100
 const MaximumFilterDepth = 8
+const MetadataSearchValueSchema = Schema.Union([
+  Schema.Null,
+  Schema.Boolean,
+  Schema.Finite,
+  Schema.String,
+])
+const MetadataRecordSchema = Schema.Record(Schema.String, JsonValueSchema)
+
+interface InspectedMetadataFilter {
+  readonly filter: MetadataFilter
+  readonly leaves: number
+}
 
 const parseKey = (key: string): string => {
   const parsed = key.trim()
@@ -88,7 +104,7 @@ const parseKey = (key: string): string => {
 }
 
 const parseValue = (value: MetadataSearchValue): MetadataSearchValue => {
-  if (typeof value === "number" && !Number.isFinite(value)) {
+  if (!Schema.is(MetadataSearchValueSchema)(value)) {
     throw new Error("Metadata filter numbers must be finite")
   }
   return value
@@ -97,7 +113,7 @@ const parseValue = (value: MetadataSearchValue): MetadataSearchValue => {
 const inspectFilter = (
   filter: MetadataFilter,
   depth: number,
-): { readonly filter: MetadataFilter; readonly leaves: number } => {
+): InspectedMetadataFilter => {
   if (depth > MaximumFilterDepth) {
     throw new Error(
       `Metadata filters support at most depth ${MaximumFilterDepth}`,
@@ -271,21 +287,11 @@ export const evaluateMetadataFilter = (
       return !evaluateMetadataFilter(metadata, filter.filter)
     case "Equals":
     case "OneOf": {
-      if (
-        metadata === undefined ||
-        metadata === null ||
-        Array.isArray(metadata) ||
-        typeof metadata !== "object"
-      ) {
+      if (metadata === undefined || !Schema.is(MetadataRecordSchema)(metadata)) {
         return false
       }
-      // SAFETY: Primitive, null, and array JsonValue branches were eliminated.
-      const record = metadata as Readonly<Record<string, JsonValue>>
-      const value = record[filter.key]
-      if (
-        value === undefined ||
-        (typeof value === "object" && value !== null)
-      ) {
+      const value = metadata[filter.key]
+      if (value === undefined || !Schema.is(MetadataSearchValueSchema)(value)) {
         return false
       }
       return filter._tag === "Equals"

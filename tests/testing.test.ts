@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 import {
   evaluateMetadataFilter,
   GraphRelationStore,
@@ -109,21 +109,21 @@ describe("adapter conformance", () => {
 
         return yield* verifyProjectionIndexStoreConformance().pipe(
           Effect.provideService(ProjectionIndexStore, broken),
-          Effect.either,
+          Effect.result,
         )
       }).pipe(Effect.provide(inMemoryDocumentGraph())),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe(
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe(
         "ProjectionIndexStoreConformanceViolation",
       )
       if (
-        result.left._tag ===
+        result.failure._tag ===
         "ProjectionIndexStoreConformanceViolation"
       ) {
-        expect(result.left.law).toBe("stale_chunk_deletion")
+        expect(result.failure.law).toBe("stale_chunk_deletion")
       }
     }
   })
@@ -165,21 +165,21 @@ describe("adapter conformance", () => {
 
         return yield* verifyProjectionIndexStoreConformance().pipe(
           Effect.provideService(ProjectionIndexStore, broken),
-          Effect.either,
+          Effect.result,
         )
       }).pipe(Effect.provide(inMemoryDocumentGraph())),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe(
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe(
         "ProjectionIndexStoreConformanceViolation",
       )
       if (
-        result.left._tag ===
+        result.failure._tag ===
         "ProjectionIndexStoreConformanceViolation"
       ) {
-        expect(result.left.law).toBe(
+        expect(result.failure.law).toBe(
           "invalid_replacement_atomicity",
         )
       }
@@ -204,21 +204,21 @@ describe("adapter conformance", () => {
 
         return yield* verifyGraphRelationStoreConformance().pipe(
           Effect.provideService(GraphRelationStore, broken),
-          Effect.either,
+          Effect.result,
         )
       }).pipe(Effect.provide(inMemoryDocumentGraph())),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe(
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe(
         "GraphRelationStoreConformanceViolation",
       )
       if (
-        result.left._tag ===
+        result.failure._tag ===
         "GraphRelationStoreConformanceViolation"
       ) {
-        expect(result.left.law).toBe("bounded_ordering")
+        expect(result.failure.law).toBe("bounded_ordering")
       }
     }
   })
@@ -272,16 +272,16 @@ describe("adapter conformance", () => {
       verifyTextSearchStoreConformance().pipe(
         Effect.provideService(ProjectionTextSearchStore, brokenStore),
         Effect.provide(inMemoryDocumentGraph()),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("SearchStoreConformanceViolation")
-      if (result.left._tag === "SearchStoreConformanceViolation") {
-        expect(result.left.channel).toBe("text")
-        expect(result.left.law).toBe("scope_before_limit")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("SearchStoreConformanceViolation")
+      if (result.failure._tag === "SearchStoreConformanceViolation") {
+        expect(result.failure.channel).toBe("text")
+        expect(result.failure.law).toBe("scope_before_limit")
       }
     }
   })
@@ -316,16 +316,16 @@ describe("adapter conformance", () => {
       verifyTextSearchStoreConformance().pipe(
         Effect.provideService(ProjectionTextSearchStore, unstableStore),
         Effect.provide(inMemoryDocumentGraph()),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("SearchStoreConformanceViolation")
-      if (result.left._tag === "SearchStoreConformanceViolation") {
-        expect(result.left.channel).toBe("text")
-        expect(result.left.law).toBe("repeatability")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("SearchStoreConformanceViolation")
+      if (result.failure._tag === "SearchStoreConformanceViolation") {
+        expect(result.failure.channel).toBe("text")
+        expect(result.failure.law).toBe("repeatability")
       }
     }
   })
@@ -354,16 +354,16 @@ describe("adapter conformance", () => {
       verifyTextSearchStoreConformance().pipe(
         Effect.provideService(ProjectionTextSearchStore, brokenStore),
         Effect.provide(inMemoryDocumentGraph()),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("SearchStoreConformanceViolation")
-      if (result.left._tag === "SearchStoreConformanceViolation") {
-        expect(result.left.channel).toBe("text")
-        expect(result.left.law).toBe("positive_text_score")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("SearchStoreConformanceViolation")
+      if (result.failure._tag === "SearchStoreConformanceViolation") {
+        expect(result.failure.channel).toBe("text")
+        expect(result.failure.law).toBe("positive_text_score")
       }
     }
   })

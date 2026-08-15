@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test"
 import {
   Array as EffectArray,
   Effect,
-  Either,
   Layer,
   Option,
+  Result,
   Schema,
 } from "effect"
 import {
@@ -31,19 +31,21 @@ import {
   type ReplaceProjectedRevision,
 } from "../src/adapter.js"
 
-const ArticleId = Schema.UUID.pipe(Schema.brand("ArticleId"))
+const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("ArticleId"),
+)
 const ArticleValue = Schema.Struct({
   id: ArticleId,
   sections: Schema.NonEmptyArray(
     Schema.Struct({
-      id: Schema.NonEmptyTrimmedString,
-      text: Schema.NonEmptyTrimmedString,
-      visibility: Schema.Literal("public", "private"),
+      id: Schema.Trimmed.check(Schema.isNonEmpty()),
+      text: Schema.Trimmed.check(Schema.isNonEmpty()),
+      visibility: Schema.Literals(["public", "private"]),
     }),
   ),
 })
 const ArticleMetadata = Schema.Struct({
-  visibility: Schema.Literal("public", "private"),
+  visibility: Schema.Literals(["public", "private"]),
 })
 const ArticleDocument = defineDocument({
   id: ArticleId,
@@ -583,12 +585,12 @@ describe("indexProjectedRevision", () => {
         Effect.provide(
           Layer.succeed(ProjectionIndexStore, store.service),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidEmbeddingOutput({
           profile: defaultProfile.id,
           reason: "wrong_dimensions",
@@ -625,12 +627,12 @@ describe("indexProjectedRevision", () => {
         Effect.provide(
           Layer.succeed(ProjectionIndexStore, conflictingStore),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new ProjectionIndexConflict({
           documentKey: revision.documentKey,
           projection: revision.projection.id,

@@ -33,7 +33,7 @@ export interface GroundingMaterial extends GroundingPayload {
 export class GroundingHydrationFailed extends Schema.TaggedError<
   GroundingHydrationFailed
 >()("GroundingHydrationFailed", {
-  reason: Schema.Literal("not_found", "unavailable", "invalid_output"),
+  reason: Schema.Literals(["not_found", "unavailable", "invalid_output"]),
   cause: Schema.optional(Schema.Unknown),
 }) {}
 
@@ -45,9 +45,10 @@ export interface GroundingHydratorService {
 }
 
 /** Effect service tag for application-owned grounding hydration. */
-export class GroundingHydrator extends Context.Tag(
-  "@popcomputer/document-graph/GroundingHydrator",
-)<GroundingHydrator, GroundingHydratorService>() {}
+export class GroundingHydrator extends Context.Service<
+  GroundingHydrator,
+  GroundingHydratorService
+>()("@popcomputer/document-graph/GroundingHydrator") {}
 
 /** Hydrate one compact hit into larger section or document material. */
 export const hydrateGrounding = (

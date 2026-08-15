@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either, Layer, Schema } from "effect"
+import { Effect, Layer, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -13,11 +13,15 @@ import {
   type GraphRelationStoreService,
 } from "../src/adapter.js"
 
-const AgencyId = Schema.UUID.pipe(Schema.brand("RelationAgencyId"))
-const WorkId = Schema.UUID.pipe(Schema.brand("RelationWorkId"))
+const AgencyId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("RelationAgencyId"),
+)
+const WorkId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("RelationWorkId"),
+)
 const Agency = Schema.Struct({
   id: AgencyId,
-  name: Schema.NonEmptyTrimmedString,
+  name: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 const Work = Schema.Struct({
   id: WorkId,
@@ -161,7 +165,7 @@ describe("graph relations", () => {
         const rejected = yield* WorkNode.index({
           id: workId,
           agencyIds: [secondAgencyId, secondAgencyId],
-        }).pipe(Effect.either)
+        }).pipe(Effect.result)
         const retained = yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         })
@@ -169,11 +173,11 @@ describe("graph relations", () => {
       }).pipe(Effect.provide(makeLive())),
     )
 
-    expect(Either.isLeft(result.rejected)).toBe(true)
-    if (Either.isLeft(result.rejected)) {
-      expect(result.rejected.left._tag).toBe("InvalidGraphRelationOutput")
-      if (result.rejected.left._tag === "InvalidGraphRelationOutput") {
-        expect(result.rejected.left).toMatchObject({
+    expect(Result.isFailure(result.rejected)).toBe(true)
+    if (Result.isFailure(result.rejected)) {
+      expect(result.rejected.failure._tag).toBe("InvalidGraphRelationOutput")
+      if (result.rejected.failure._tag === "InvalidGraphRelationOutput") {
+        expect(result.rejected.failure).toMatchObject({
           graph: graph.id,
           documentKind: "Work",
           relation: "deliveredBy",
@@ -191,13 +195,13 @@ describe("graph relations", () => {
       WorkNode.neighbours(workId, {
         via: "deliveredBy",
         limit: 0,
-      }).pipe(Effect.provide(makeLive()), Effect.either),
+      }).pipe(Effect.provide(makeLive()), Effect.result),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("InvalidGraphTraversal")
-      expect(result.left.reason).toBe("invalid_limit")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("InvalidGraphTraversal")
+      expect(result.failure.reason).toBe("invalid_limit")
     }
   })
 
@@ -225,17 +229,17 @@ describe("graph relations", () => {
           via: "deliveredBy",
         }).pipe(
           Effect.provide(Layer.succeed(GraphRelationStore, malformed)),
-          Effect.either,
+          Effect.result,
         )
       }),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("DocumentGraphUnavailable")
-      if (result.left._tag === "DocumentGraphUnavailable") {
-        expect(result.left.operation).toBe("neighbours")
-        expect(result.left.reason).toBe("invalid_stored_data")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("DocumentGraphUnavailable")
+      if (result.failure._tag === "DocumentGraphUnavailable") {
+        expect(result.failure.operation).toBe("neighbours")
+        expect(result.failure.reason).toBe("invalid_stored_data")
       }
     }
   })
@@ -297,7 +301,7 @@ describe("graph relations", () => {
   })
 })
 
-if (false) {
+if (import.meta.url === "") {
   AgencyNode.neighbours(firstAgencyId, {
     via: "deliveredBy",
     direction: "incoming",

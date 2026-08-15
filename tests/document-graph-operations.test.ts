@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either, Layer, Option, Schema, Tracer } from "effect"
+import { Effect, Layer, Option, Result, Schema, Tracer } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -8,8 +8,6 @@ import {
   EmbeddingProviderFailed,
   GraphRelationStore,
   IndexRevisionTokenSchema,
-  InvalidSearchOutput,
-  InvalidSearchQuery,
   makeGraphSearchScope,
   ProjectionIndexConflict,
   ProjectionIndexStore,
@@ -30,11 +28,13 @@ import {
 } from "../src/adapter.js"
 import { makeChunkId } from "../src/document/document-identity.js"
 
-const GuideId = Schema.UUID.pipe(Schema.brand("GraphOperationGuideId"))
+const GuideId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("GraphOperationGuideId"),
+)
 const Guide = Schema.Struct({
   id: GuideId,
-  title: Schema.NonEmptyTrimmedString,
-  content: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
+  content: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 const GuideMetadata = Schema.Struct({
   kind: Schema.Literal("guide"),
@@ -388,25 +388,25 @@ describe("document graph operations", () => {
     const results = await Effect.runPromise(
       Effect.all({
         graph: graph.search("distribution", { limit: 0 }).pipe(
-          Effect.either,
+          Effect.result,
         ),
         semantic: GuideContent.search("distribution", {
           strategy: "semantic",
           candidates: { semantic: 1 },
           limit: 2,
-        }).pipe(Effect.either),
+        }).pipe(Effect.result),
         text: GuideContent.search("distribution", {
           strategy: "text",
           candidates: { text: 0 },
-        }).pipe(Effect.either),
+        }).pipe(Effect.result),
       }).pipe(Effect.provide(services.layer)),
     )
 
     for (const result of Object.values(results)) {
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left._tag).toBe("InvalidSearchQuery")
-        expect(result.left.reason).toBe("invalid_options")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("InvalidSearchQuery")
+        expect(result.failure.reason).toBe("invalid_options")
       }
     }
   })
@@ -484,7 +484,7 @@ describe("document graph operations", () => {
   test("rejects text search when the projection disables it", async () => {
     const textStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: () =>
-        Effect.dieMessage("A disabled text projection reached storage"),
+        Effect.die(new Error("A disabled text projection reached storage")),
     }
 
     const result = await Effect.runPromise(
@@ -494,14 +494,14 @@ describe("document graph operations", () => {
         Effect.provide(
           Layer.succeed(ProjectionTextSearchStore, textStore),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("InvalidSearchQuery")
-      expect(result.left.reason).toBe("text_disabled")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("InvalidSearchQuery")
+      expect(result.failure.reason).toBe("text_disabled")
     }
   })
 
@@ -584,20 +584,21 @@ describe("document graph operations", () => {
           Effect.provide(
             Layer.succeed(ProjectionTextSearchStore, textStore),
           ),
-          Effect.either,
+          Effect.result,
         ),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
+      expect(Result.isFailure(result)).toBe(true)
       if (
-        Either.isLeft(result) &&
-        result.left._tag === "DocumentGraphUnavailable"
+        Result.isFailure(result) &&
+        result.failure._tag === "DocumentGraphUnavailable"
       ) {
-        expect(result.left.reason).toBe("invalid_stored_data")
-        const cause = result.left.cause as InvalidSearchOutput
-        expect(cause._tag).toBe("InvalidSearchOutput")
-        expect(cause.channel).toBe("text")
-        expect(cause.reason).toBe(fixture.reason)
+        expect(result.failure.reason).toBe("invalid_stored_data")
+        expect(result.failure.cause).toMatchObject({
+          _tag: "InvalidSearchOutput",
+          channel: "text",
+          reason: fixture.reason,
+        })
       }
     }
   })
@@ -609,20 +610,22 @@ describe("document graph operations", () => {
       Effect.gen(function*() {
         yield* GuideNode.index(guide)
         return yield* GuideContent.search("distribution").pipe(
-          Effect.either,
+          Effect.result,
         )
       }).pipe(Effect.provide(services.layer)),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("DocumentGraphUnavailable")
-      if (result.left._tag === "DocumentGraphUnavailable") {
-        expect(result.left.operation).toBe("search")
-        expect(result.left.reason).toBe("invalid_stored_data")
-        expect((result.left.cause as InvalidSearchOutput)._tag).toBe(
-          "InvalidSearchOutput",
-        )
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("DocumentGraphUnavailable")
+      if (result.failure._tag === "DocumentGraphUnavailable") {
+        expect(result.failure.operation).toBe("search")
+        expect(result.failure.reason).toBe("invalid_stored_data")
+        expect(result.failure.cause).toMatchObject({
+          _tag: "InvalidSearchOutput",
+          channel: "semantic",
+          reason: "out_of_scope",
+        })
       }
     }
   })
@@ -648,26 +651,28 @@ describe("document graph operations", () => {
             Layer.succeed(GraphRelationStore, services.relationStore),
           ),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
+    expect(Result.isFailure(result)).toBe(true)
     if (
-      Either.isLeft(result) &&
-      result.left._tag === "DocumentGraphUnavailable"
+      Result.isFailure(result) &&
+      result.failure._tag === "DocumentGraphUnavailable"
     ) {
-      expect(result.left.operation).toBe("index")
-      expect(result.left.reason).toBe("embedding_failed")
-      expect((result.left.cause as EmbeddingProviderFailed)._tag).toBe(
-        "EmbeddingProviderFailed",
-      )
-      expect(toDocumentGraphErrorTelemetry(result.left)).toEqual({
+      expect(result.failure.operation).toBe("index")
+      expect(result.failure.reason).toBe("embedding_failed")
+      expect(result.failure.cause).toMatchObject({
+        _tag: "EmbeddingProviderFailed",
+        profile: profile.id,
+        reason: "unavailable",
+      })
+      expect(toDocumentGraphErrorTelemetry(result.failure)).toEqual({
         errorTag: "DocumentGraphUnavailable",
         errorOperation: "index",
         errorReason: "embedding_failed",
       })
-      expect("cause" in toDocumentGraphErrorTelemetry(result.left)).toBe(
+      expect("cause" in toDocumentGraphErrorTelemetry(result.failure)).toBe(
         false,
       )
     }
@@ -679,14 +684,14 @@ describe("document graph operations", () => {
     const result = await Effect.runPromise(
       graph.search("   ").pipe(
         Effect.provide(services.layer),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("InvalidSearchQuery")
-      expect(result.left.reason).toBe("empty")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("InvalidSearchQuery")
+      expect(result.failure.reason).toBe("empty")
     }
   })
 
@@ -708,19 +713,20 @@ describe("document graph operations", () => {
             Layer.succeed(ProjectionSearchStore, failingSearchStore),
           ),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("DocumentGraphUnavailable")
-      if (result.left._tag === "DocumentGraphUnavailable") {
-        expect(result.left.operation).toBe("search")
-        expect(result.left.reason).toBe("storage_failed")
-        expect((result.left.cause as ProjectionSearchStoreFailed)._tag).toBe(
-          "ProjectionSearchStoreFailed",
-        )
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("DocumentGraphUnavailable")
+      if (result.failure._tag === "DocumentGraphUnavailable") {
+        expect(result.failure.operation).toBe("search")
+        expect(result.failure.reason).toBe("storage_failed")
+        expect(result.failure.cause).toMatchObject({
+          _tag: "ProjectionSearchStoreFailed",
+          reason: "unavailable",
+        })
       }
     }
   })
@@ -741,20 +747,21 @@ describe("document graph operations", () => {
         Effect.provide(
           Layer.succeed(ProjectionTextSearchStore, failingTextStore),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
+    expect(Result.isFailure(result)).toBe(true)
     if (
-      Either.isLeft(result) &&
-      result.left._tag === "DocumentGraphUnavailable"
+      Result.isFailure(result) &&
+      result.failure._tag === "DocumentGraphUnavailable"
     ) {
-      expect(result.left.operation).toBe("search")
-      expect(result.left.reason).toBe("storage_failed")
-      const cause = result.left.cause as ProjectionTextSearchStoreFailed
-      expect(cause._tag).toBe("ProjectionTextSearchStoreFailed")
-      expect(cause.reason).toBe("unavailable")
+      expect(result.failure.operation).toBe("search")
+      expect(result.failure.reason).toBe("storage_failed")
+      expect(result.failure.cause).toMatchObject({
+        _tag: "ProjectionTextSearchStoreFailed",
+        reason: "unavailable",
+      })
     }
   })
 
@@ -780,13 +787,13 @@ describe("document graph operations", () => {
             Layer.succeed(GraphRelationStore, services.relationStore),
           ),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("ProjectionIndexConflict")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("ProjectionIndexConflict")
     }
   })
 
@@ -814,24 +821,24 @@ describe("document graph operations", () => {
 
     const result = await Effect.runPromise(
       Effect.all({
-        remove: GuideNode.remove(guide.id).pipe(Effect.either),
-        reconcile: graph.reconcileIndex().pipe(Effect.either),
+        remove: GuideNode.remove(guide.id).pipe(Effect.result),
+        reconcile: graph.reconcileIndex().pipe(Effect.result),
       }).pipe(Effect.provide(layer)),
     )
 
-    expect(Either.isLeft(result.remove)).toBe(true)
+    expect(Result.isFailure(result.remove)).toBe(true)
     if (
-      Either.isLeft(result.remove) &&
-      result.remove.left._tag === "DocumentGraphUnavailable"
+      Result.isFailure(result.remove) &&
+      result.remove.failure._tag === "DocumentGraphUnavailable"
     ) {
-      expect(result.remove.left.operation).toBe("remove")
-      expect(result.remove.left.reason).toBe("storage_failed")
+      expect(result.remove.failure.operation).toBe("remove")
+      expect(result.remove.failure.reason).toBe("storage_failed")
     }
 
-    expect(Either.isLeft(result.reconcile)).toBe(true)
-    if (Either.isLeft(result.reconcile)) {
-      expect(result.reconcile.left.operation).toBe("reconcile_index")
-      expect(result.reconcile.left.reason).toBe("invalid_stored_data")
+    expect(Result.isFailure(result.reconcile)).toBe(true)
+    if (Result.isFailure(result.reconcile)) {
+      expect(result.reconcile.failure.operation).toBe("reconcile_index")
+      expect(result.reconcile.failure.reason).toBe("invalid_stored_data")
     }
   })
 
@@ -842,45 +849,20 @@ describe("document graph operations", () => {
       readonly attributes: ReadonlyMap<string, unknown>
     }> = []
     const tracer = Tracer.make({
-      span: (
-        name,
-        parent,
-        context,
-        links,
-        startTime,
-        kind,
-        options,
-      ) => {
-        const attributes = new Map(
-          Object.entries(options?.attributes ?? {}),
-        )
-        const span: Tracer.Span = {
-          _tag: "Span",
-          name,
-          parent,
-          context,
-          links,
-          kind,
-          attributes,
-          spanId: "test-span",
-          traceId: "test-trace",
-          sampled: true,
-          status: { _tag: "Started", startTime },
-          end: () => undefined,
-          attribute: (key, value) => attributes.set(key, value),
-          event: () => undefined,
-          addLinks: () => undefined,
-        }
-        observed.push({ name, attributes })
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options)
+        observed.push({
+          name: options.name,
+          attributes: span.attributes,
+        })
         return span
       },
-      context: (evaluate) => evaluate(),
     })
 
     await Effect.runPromise(
       GuideContent.search("private campaign wording").pipe(
         Effect.provide(services.layer),
-        Effect.provide(Layer.setTracer(tracer)),
+        Effect.provide(Layer.succeed(Tracer.Tracer, tracer)),
       ),
     )
 
@@ -905,7 +887,7 @@ describe("document graph operations", () => {
   })
 })
 
-if (false) {
+if (import.meta.url === "") {
   // @ts-expect-error Indexing only accepts projections owned by Guide.
   graph.index("Guide", "unknown-projection", guide)
 

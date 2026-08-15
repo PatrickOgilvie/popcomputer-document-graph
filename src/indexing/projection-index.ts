@@ -2,8 +2,8 @@ import {
   Array as EffectArray,
   Context,
   Effect,
-  Either,
   Option,
+  Result,
   Schema,
 } from "effect"
 import type { JsonValue } from "../document/json-value.js"
@@ -25,8 +25,10 @@ import {
 } from "./embedding-provider.js"
 
 /** Opaque optimistic-concurrency token owned by an index store. */
-export const IndexRevisionTokenSchema = Schema.NonEmptyTrimmedString.pipe(
-  Schema.maxLength(500),
+export const IndexRevisionTokenSchema = Schema.Trimmed.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(500),
+).pipe(
   Schema.brand("IndexRevisionToken"),
 )
 
@@ -134,7 +136,7 @@ export const isValidEmbeddingVector = (
 export const planProjectedRevisionReplacement = (
   replacement: ReplaceProjectedRevision,
   reusableVectors: ReadonlyMap<ContentHash, ReadonlyArray<number>>,
-): Either.Either<
+): Result.Result<
   ProjectedRevisionReplacementPlan,
   ProjectedRevisionReplacementIssue
 > => {
@@ -146,13 +148,13 @@ export const planProjectedRevisionReplacement = (
   for (const chunk of replacement.chunks) {
     const sectionPart = `${chunk.sectionKey}\u0000${chunk.sectionPart}`
     if (chunkIds.has(chunk.chunkId)) {
-      return Either.left("duplicate_chunk_id")
+      return Result.fail("duplicate_chunk_id")
     }
     if (ordinals.has(chunk.ordinal)) {
-      return Either.left("duplicate_ordinal")
+      return Result.fail("duplicate_ordinal")
     }
     if (sectionParts.has(sectionPart)) {
-      return Either.left("duplicate_section_part")
+      return Result.fail("duplicate_section_part")
     }
     if (
       !Number.isInteger(chunk.ordinal) ||
@@ -162,13 +164,13 @@ export const planProjectedRevisionReplacement = (
       chunk.sectionIndex < 0 ||
       chunk.sectionPart < 0
     ) {
-      return Either.left("invalid_chunk_position")
+      return Result.fail("invalid_chunk_position")
     }
     if (
       chunk.content.trim().length === 0 ||
       chunk.embeddingContent.trim().length === 0
     ) {
-      return Either.left("blank_content")
+      return Result.fail("blank_content")
     }
 
     chunkIds.add(chunk.chunkId)
@@ -181,10 +183,10 @@ export const planProjectedRevisionReplacement = (
   const supplied = new Set<ContentHash>()
   for (const embedding of replacement.embeddings) {
     if (supplied.has(embedding.contentHash)) {
-      return Either.left("duplicate_embedding")
+      return Result.fail("duplicate_embedding")
     }
     if (!expectedContent.has(embedding.contentHash)) {
-      return Either.left("unexpected_embedding")
+      return Result.fail("unexpected_embedding")
     }
     if (
       !isValidEmbeddingVector(
@@ -192,7 +194,7 @@ export const planProjectedRevisionReplacement = (
         replacement.embeddingProfile.dimensions,
       )
     ) {
-      return Either.left("invalid_embedding")
+      return Result.fail("invalid_embedding")
     }
 
     supplied.add(embedding.contentHash)
@@ -201,11 +203,11 @@ export const planProjectedRevisionReplacement = (
 
   for (const contentHash of expectedContent) {
     if (!vectors.has(contentHash)) {
-      return Either.left("missing_embedding")
+      return Result.fail("missing_embedding")
     }
   }
 
-  return Either.right({ chunkIds, vectors })
+  return Result.succeed({ chunkIds, vectors })
 }
 
 /** Observable storage changes made by one atomic revision replacement. */
@@ -266,13 +268,13 @@ export interface ProjectionIndexPrune {
 export class ProjectionIndexStoreFailed extends Schema.TaggedError<
   ProjectionIndexStoreFailed
 >()("ProjectionIndexStoreFailed", {
-  operation: Schema.Literal(
+  operation: Schema.Literals([
     "load_revision",
     "replace_revision",
     "delete_revision",
     "prune_graph",
-  ),
-  reason: Schema.Literal("unavailable", "invalid_stored_state"),
+  ]),
+  reason: Schema.Literals(["unavailable", "invalid_stored_state"]),
   cause: Schema.Unknown,
 }) {}
 
@@ -319,9 +321,10 @@ export interface ProjectionIndexStoreService {
 }
 
 /** Effect service tag for vector and graph projection persistence. */
-export class ProjectionIndexStore extends Context.Tag(
-  "@popcomputer/document-graph/ProjectionIndexStore",
-)<ProjectionIndexStore, ProjectionIndexStoreService>() {}
+export class ProjectionIndexStore extends Context.Service<
+  ProjectionIndexStore,
+  ProjectionIndexStoreService
+>()("@popcomputer/document-graph/ProjectionIndexStore") {}
 
 interface IndexableProjectedChunk {
   readonly chunkId: ChunkId
@@ -539,7 +542,7 @@ export const indexProjectedRevision = (
     }
 
     const requests = Array.from(embeddingRequests.values())
-    const embeddingEffect = !EffectArray.isNonEmptyReadonlyArray(requests)
+    const embeddingEffect = !EffectArray.isReadonlyArrayNonEmpty(requests)
       ? Effect.succeed<ReadonlyArray<EmbeddedContent>>([])
       : embeddings.embedDocuments(requests).pipe(
           Effect.flatMap((output) =>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -11,11 +11,11 @@ import {
 } from "../src/index.js"
 import { ProjectionSearchStore } from "../src/adapter.js"
 
-const ArticleId = Schema.UUID.pipe(Schema.brand("ApplicationArticleId"))
+const ArticleId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("ApplicationArticleId"))
 const Article = Schema.Struct({
   id: ArticleId,
-  title: Schema.NonEmptyTrimmedString,
-  body: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
+  body: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const ArticleDocument = defineDocument(Article, { id: "id" }).vectorise({
@@ -36,12 +36,12 @@ const graph = defineDocumentGraph({
   documents: { Article: ArticleDocument },
 })
 
-const CollectionId = Schema.UUID.pipe(
+const CollectionId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("ApplicationCollectionId"),
 )
 const Collection = Schema.Struct({
   id: CollectionId,
-  entries: Schema.Array(Schema.NonEmptyTrimmedString),
+  entries: Schema.Array(Schema.Trimmed.check(Schema.isNonEmpty())),
 })
 const CollectionDocument = defineDocument(Collection, {
   id: "id",
@@ -135,11 +135,11 @@ describe("application API", () => {
         .document("Collection")
         .projection("collection-entries")
         .project({ id: collectionId, entries: [] })
-        .pipe(Effect.either),
+        .pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidVectorProjectionOutput({
           graph: "collection-api",
           documentKind: "Collection",
@@ -151,7 +151,7 @@ describe("application API", () => {
   })
 })
 
-if (false) {
+if (import.meta.url === "") {
   type AppEffectServices = DocumentGraphServices
   const searchAction: Effect.Effect<
     unknown,
@@ -199,13 +199,13 @@ if (false) {
   void hybridSearchAction
 
   // @ts-expect-error The application facade has no inert graph version.
-  graph.version
+  void graph.version
 
   // @ts-expect-error Relations are absent until traversal is implemented.
-  graph.relate
+  void graph.relate
 
   // @ts-expect-error Storage-oriented scope construction is adapter-only.
-  graph.scope
+  void graph.scope
 
   // @ts-expect-error Graph-wide filters infer registered document kinds.
   graph.search("query", { include: ["Unknown"] })

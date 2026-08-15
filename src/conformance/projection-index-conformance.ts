@@ -1,4 +1,4 @@
-import { Effect, Either, Option, Schema } from "effect"
+import { Effect, Option, Result, Schema } from "effect"
 import {
   ChunkIdSchema,
   ContentHashSchema,
@@ -18,7 +18,7 @@ import {
 import { defineEmbeddingProfile } from "../indexing/embedding-provider.js"
 
 /** Persistence laws checked against every projection-index adapter. */
-export const ProjectionIndexStoreConformanceLawSchema = Schema.Literal(
+export const ProjectionIndexStoreConformanceLawSchema = Schema.Literals([
   "complete_replacement",
   "snapshot_inventory",
   "content_hash_reuse",
@@ -27,7 +27,7 @@ export const ProjectionIndexStoreConformanceLawSchema = Schema.Literal(
   "stale_chunk_deletion",
   "idempotent_deletion",
   "schema_pruning",
-)
+])
 
 /** Persistence law checked against every projection-index adapter. */
 export type ProjectionIndexStoreConformanceLaw =
@@ -294,11 +294,11 @@ const verifyRejectedWithoutMutation = (
 ) =>
   Effect.gen(function*() {
     const store = yield* ProjectionIndexStore
-    const rejected = yield* store.replaceRevision(replacement).pipe(Effect.either)
+    const rejected = yield* store.replaceRevision(replacement).pipe(Effect.result)
     if (
-      !Either.isLeft(rejected) ||
-      rejected.left._tag !== "ProjectionIndexStoreFailed" ||
-      rejected.left.reason !== "invalid_stored_state"
+      !Result.isFailure(rejected) ||
+      rejected.failure._tag !== "ProjectionIndexStoreFailed" ||
+      rejected.failure.reason !== "invalid_stored_state"
     ) {
       return yield* Effect.fail(violation(law))
     }
@@ -374,10 +374,10 @@ export const verifyProjectionIndexStoreConformance = () =>
       .replaceRevision(
         withExpectedToken(fixture.reduced, initialSnapshot.token),
       )
-      .pipe(Effect.either)
+      .pipe(Effect.result)
     if (
-      !Either.isLeft(staleWrite) ||
-      !(staleWrite.left instanceof ProjectionIndexConflict)
+      !Result.isFailure(staleWrite) ||
+      !(staleWrite.failure instanceof ProjectionIndexConflict)
     ) {
       return yield* Effect.fail(violation("optimistic_conflict"))
     }

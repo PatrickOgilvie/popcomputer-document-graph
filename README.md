@@ -38,12 +38,13 @@ response shapes.
 ## Installation
 
 ```sh
-bun add @popcomputer/document-graph effect@^3.21.2 pg
+bun add @popcomputer/document-graph effect@4.0.0-rc.109 pg
 ```
 
-The package currently supports Effect `^3.21.2`. Applications using
-`@popcomputer/web/effect` normally satisfy this peer dependency. `pg` is needed
-when composing the included PostgreSQL adapter.
+The package currently targets Effect `4.0.0-rc.109`. The published
+`@popcomputer/web@0.3.0-rc.1` package still declares an Effect v3 peer, so its
+integration needs a v4-compatible release before the two packages can be used
+together. `pg` is needed when composing the included PostgreSQL adapter.
 
 For PostgreSQL, apply
 [`migrations/postgres/0001_initial.sql`](./migrations/postgres/0001_initial.sql)
@@ -62,9 +63,9 @@ import {
 } from "@popcomputer/document-graph"
 
 export const ArticleSchema = Schema.Struct({
-  id: Schema.UUID,
-  title: Schema.NonEmptyTrimmedString,
-  body: Schema.NonEmptyTrimmedString,
+  id: Schema.String.check(Schema.isUUID()),
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
+  body: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const ArticleDocument = defineDocument(ArticleSchema, { id: "id" }).vectorise({
@@ -358,120 +359,13 @@ semantic and text retrieval by default. It does not index the Article first.
 Once source changes have been indexed, this operation can run for every search
 request without re-embedding content.
 
-## Popcomputer Web actions
+## Web integrations
 
-Indexing and searching naturally belong to different Popcomputer Web actions
-because they have different triggers. Graph operations remain ordinary
-Effects, so each action only owns its HTTP boundary.
-
-### Index after a content write
-
-```ts
-import { Effect } from "effect"
-import {
-  action,
-  httpError,
-  json,
-  validateRequest,
-} from "@popcomputer/web/effect"
-import {
-  ArticleSchema,
-  Articles,
-} from "./knowledge-graph.js"
-
-const strictBody = {
-  request: { order: ["body"] },
-  parseOptions: { onExcessProperty: "error" },
-} as const
-
-export const indexArticleAction = action(
-  Effect.gen(function* () {
-    const article = yield* validateRequest(ArticleSchema, strictBody)
-    const indexed = yield* Articles.index(article).pipe(
-      Effect.catchTag("ProjectionIndexConflict", () =>
-        httpError(409, "The article changed while it was being indexed"),
-      ),
-      Effect.catchTag("DocumentGraphUnavailable", () =>
-        httpError(503, "Indexing is temporarily unavailable"),
-      ),
-      Effect.catchAll(() =>
-        httpError(422, "The article could not be indexed"),
-      ),
-    )
-
-    return yield* json({
-      projections: indexed.projections.map(({ projection, result }) => ({
-        projection,
-        change: result._tag,
-      })),
-      relations: {
-        inserted: indexed.relations.inserted,
-        retained: indexed.relations.retained,
-        deleted: indexed.relations.deleted,
-      },
-    })
-  }),
-)
-```
-
-This action is called by the trusted content-write path after the application
-has accepted the new Article. It keeps every projection and outgoing graph
-relation for that Article current.
-
-### Search from a read action
-
-```ts
-import { Effect, Schema } from "effect"
-import {
-  action,
-  httpError,
-  json,
-  validateRequest,
-} from "@popcomputer/web/effect"
-import { ArticleContent } from "./knowledge-graph.js"
-
-const SearchRequest = Schema.Struct({
-  query: Schema.NonEmptyTrimmedString.pipe(Schema.maxLength(4_000)),
-})
-
-const strictBody = {
-  request: { order: ["body"] },
-  parseOptions: { onExcessProperty: "error" },
-} as const
-
-export const searchArticlesAction = action(
-  Effect.gen(function* () {
-    const input = yield* validateRequest(SearchRequest, strictBody)
-
-    const hits = yield* ArticleContent.search(input.query, {
-      limit: 10,
-    }).pipe(
-      Effect.catchTag("InvalidSearchQuery", () =>
-        httpError(400, "Enter a valid search query"),
-      ),
-      Effect.catchTag("DocumentGraphUnavailable", () =>
-        httpError(503, "Search is temporarily unavailable"),
-      ),
-    )
-
-    return yield* json({
-      articles: hits.map((hit) => ({
-        articleId: hit.reference.id,
-        content: hit.content,
-      })),
-    })
-  }),
-)
-```
-
-The search action assumes the write path has already kept the index current; it
-never calls `index`. Request parsing, public errors, and JSON projection remain
-application-owned. The graph can therefore be reused from actions, background
-jobs, internal services, and tool endpoints without a transport-specific
-wrapper.
-
-See [`examples/popcomputer-web-actions.ts`](./examples/popcomputer-web-actions.ts)
-for complete action examples.
+Graph operations remain ordinary Effects, so applications can place their HTTP
+boundary around indexing and search without a transport-specific wrapper. The
+published `@popcomputer/web@0.3.0-rc.1` package still requires Effect v3, so the
+former Web action example is intentionally not included in this v4 release. It
+can return once `@popcomputer/web` publishes an Effect v4-compatible version.
 
 ## Design model
 
@@ -504,14 +398,14 @@ For composite identity, use the advanced document form:
 
 ```ts
 const LocalizedArticleId = Schema.Struct({
-  site: Schema.NonEmptyTrimmedString,
-  slug: Schema.NonEmptyTrimmedString,
+  site: Schema.Trimmed.check(Schema.isNonEmpty()),
+  slug: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const LocalizedArticle = Schema.Struct({
-  site: Schema.NonEmptyTrimmedString,
-  slug: Schema.NonEmptyTrimmedString,
-  title: Schema.NonEmptyTrimmedString,
+  site: Schema.Trimmed.check(Schema.isNonEmpty()),
+  slug: Schema.Trimmed.check(Schema.isNonEmpty()),
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const LocalizedArticleDocument = defineDocument({
@@ -621,7 +515,7 @@ Projection metadata is declared with Effect Schema:
 
 ```ts
 const EvidenceMetadata = Schema.Struct({
-  kind: Schema.Literal("challenge", "approach", "outcome"),
+  kind: Schema.Literals(["challenge", "approach", "outcome"]),
 })
 ```
 
@@ -839,7 +733,7 @@ Source locations are application-owned metadata because web anchors, PDF
 pages, CMS blocks, and timestamps use different addressing models:
 
 ```ts
-const Citation = Schema.Union(
+const Citation = Schema.Union([
   Schema.Struct({
     _tag: Schema.Literal("web"),
     url: Schema.String,
@@ -848,9 +742,12 @@ const Citation = Schema.Union(
   Schema.Struct({
     _tag: Schema.Literal("pdf"),
     assetId: Schema.String,
-    page: Schema.Number.pipe(Schema.int(), Schema.positive()),
+    page: Schema.Number.pipe(
+      Schema.check(Schema.isInt()),
+      Schema.check(Schema.isGreaterThan(0)),
+    ),
   }),
-)
+])
 ```
 
 The default section-aware chunker uses a maximum of 1,800 characters. Override

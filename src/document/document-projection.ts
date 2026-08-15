@@ -24,9 +24,8 @@ import {
   type ParsedDocumentInstance,
 } from "./document-instance.js"
 import type {
-  ProjectedDocument,
+  RegisteredVectorProjection,
   VectorProjection,
-  VectorProjectionShape,
 } from "./vector-projection.js"
 import type { ProjectedText } from "./text-search-policy.js"
 
@@ -146,14 +145,14 @@ export class InvalidVectorProjectionOutput extends Schema.TaggedError<
   graph: Schema.String,
   documentKind: Schema.String,
   projection: Schema.String,
-  reason: Schema.Literal(
+  reason: Schema.Literals([
     "invalid_shape",
     "empty_sections",
     "missing_metadata",
     "unexpected_metadata",
     "invalid_metadata",
     "duplicate_section_key",
-  ),
+  ]),
 }) {}
 
 /** A valid projection cannot be represented by its declared chunking policy. */
@@ -163,10 +162,10 @@ export class DocumentChunkingFailed extends Schema.TaggedError<
   graph: Schema.String,
   documentKind: Schema.String,
   projection: Schema.String,
-  reason: Schema.Literal(
+  reason: Schema.Literals([
     "invalid_output",
     "chunk_exceeds_maximum",
-  ),
+  ]),
 }) {}
 
 /** Expected failures produced while projecting and chunking one document. */
@@ -176,23 +175,31 @@ export type ProjectDocumentError =
   | InvalidVectorProjectionOutput
   | DocumentChunkingFailed
 
+const NonEmptyTrimmedStringSchema = Schema.Trimmed.pipe(
+  Schema.check(Schema.isNonEmpty()),
+)
+
 const ProjectedSectionOutputSchema = Schema.Struct({
-  key: Schema.NonEmptyTrimmedString.pipe(Schema.maxLength(200)),
-  label: Schema.optional(
-    Schema.NonEmptyTrimmedString.pipe(Schema.maxLength(200)),
+  key: NonEmptyTrimmedStringSchema.pipe(
+    Schema.check(Schema.isMaxLength(200)),
   ),
-  content: Schema.NonEmptyTrimmedString,
+  label: Schema.optional(
+    NonEmptyTrimmedStringSchema.pipe(
+      Schema.check(Schema.isMaxLength(200)),
+    ),
+  ),
+  content: NonEmptyTrimmedStringSchema,
   metadata: Schema.optional(Schema.Unknown),
 })
 
 const ProjectedDocumentOutputSchema = Schema.Struct({
-  context: Schema.optional(Schema.NonEmptyTrimmedString),
+  context: Schema.optional(NonEmptyTrimmedStringSchema),
   sections: Schema.Array(ProjectedSectionOutputSchema),
 })
 
 const ChunkFragmentOutputSchema = Schema.Struct({
-  content: Schema.NonEmptyTrimmedString,
-  embeddingContent: Schema.optional(Schema.NonEmptyTrimmedString),
+  content: NonEmptyTrimmedStringSchema,
+  embeddingContent: Schema.optional(NonEmptyTrimmedStringSchema),
 })
 
 const ChunkerOutputSchema = Schema.NonEmptyArray(
@@ -226,8 +233,9 @@ interface ParsedProjectedDocument {
   ]
 }
 
-interface ExecutableVectorProjection extends VectorProjectionShape {
-  readonly select: (value: unknown) => unknown
+interface ExecutableVectorProjection<Value>
+  extends RegisteredVectorProjection {
+  readonly select: (value: Value) => ProjectedDocumentCandidate
 }
 
 const projectionOutputError = (
@@ -259,7 +267,7 @@ const documentChunkingError = (
 const parseProjectionMetadata = (
   graph: string,
   documentKind: string,
-  projection: ExecutableVectorProjection,
+  projection: RegisteredVectorProjection,
   document: ProjectedDocumentCandidate,
 ): Effect.Effect<ParsedProjectedDocument, InvalidVectorProjectionOutput> =>
   Effect.forEach(document.sections, (section) => {
@@ -293,9 +301,9 @@ const parseProjectionMetadata = (
       )
     }
 
-    return Schema.validate(projection.metadataSchema)(section.metadata, {
-      onExcessProperty: "error",
-    }).pipe(
+    return Schema.decodeEffect(
+      Schema.toType(projection.metadataSchema),
+    )(section.metadata, { onExcessProperty: "error" }).pipe(
       Effect.mapError(() =>
         projectionOutputError(
           graph,
@@ -305,9 +313,9 @@ const parseProjectionMetadata = (
         ),
       ),
       Effect.flatMap((metadata) =>
-        Schema.validate(JsonValueSchema)(metadata, {
-          onExcessProperty: "error",
-        }).pipe(
+        Schema.decodeUnknownEffect(
+          Schema.toType(JsonValueSchema),
+        )(metadata, { onExcessProperty: "error" }).pipe(
           Effect.mapError(() =>
             projectionOutputError(
               graph,
@@ -327,7 +335,7 @@ const parseProjectionMetadata = (
     )
   }).pipe(
     Effect.flatMap((sections) => {
-      if (!EffectArray.isNonEmptyReadonlyArray(sections)) {
+      if (!EffectArray.isReadonlyArrayNonEmpty(sections)) {
         return Effect.fail(
           projectionOutputError(
             graph,
@@ -381,7 +389,7 @@ const chunkProjectedDocument = (
   graph: string,
   documentKind: string,
   target: DocumentReference<string, DocumentDefinitions>,
-  projection: ExecutableVectorProjection,
+  projection: RegisteredVectorProjection,
   document: ParsedProjectedDocument,
 ): Effect.Effect<
   readonly [UnidentifiedChunk, ...ReadonlyArray<UnidentifiedChunk>],
@@ -409,10 +417,9 @@ const chunkProjectedDocument = (
             "invalid_output",
           ),
       })
-      const fragments = yield* Schema.validate(ChunkerOutputSchema)(
-        output,
-        { onExcessProperty: "error" },
-      ).pipe(
+      const fragments = yield* Schema.decodeUnknownEffect(
+        Schema.toType(ChunkerOutputSchema),
+      )(output, { onExcessProperty: "error" }).pipe(
         Effect.mapError(() =>
           documentChunkingError(
             graph,
@@ -467,9 +474,11 @@ const chunkProjectedDocument = (
       }
     }
 
-    if (!EffectArray.isNonEmptyReadonlyArray(chunks)) {
-      return yield* Effect.dieMessage(
-        "Parsed non-empty sections unexpectedly produced no chunks",
+    if (!EffectArray.isReadonlyArrayNonEmpty(chunks)) {
+      return yield* Effect.die(
+        new Error(
+          "Parsed non-empty sections unexpectedly produced no chunks",
+        ),
       )
     }
 
@@ -486,7 +495,7 @@ interface IdentifiedChunk extends UnidentifiedChunk {
 
 const identifyChunks = (
   documentKey: DocumentKey,
-  projection: ExecutableVectorProjection,
+  projection: RegisteredVectorProjection,
   chunks: readonly [
     UnidentifiedChunk,
     ...ReadonlyArray<UnidentifiedChunk>,
@@ -556,8 +565,10 @@ export const projectParsedDocument = <
 > => {
   const definition = documents[documentKind]
   if (definition === undefined) {
-    return Effect.dieMessage(
-      `Unknown document kind ${documentKind} for graph ${graph}`,
+    return Effect.die(
+      new Error(
+        `Unknown document kind ${documentKind} for graph ${graph}`,
+      ),
     )
   }
 
@@ -566,15 +577,18 @@ export const projectParsedDocument = <
   )
 
   if (selectedProjection === undefined) {
-    return Effect.dieMessage(
-      `Unknown projection ${projectionId} for document kind ${documentKind}`,
+    return Effect.die(
+      new Error(
+        `Unknown projection ${projectionId} for document kind ${documentKind}`,
+      ),
     )
   }
 
   // SAFETY: the projection was selected from this document definition after
   // the type system restricted its ID to that definition's projection tuple.
-  const projection =
-    selectedProjection as unknown as ExecutableVectorProjection
+  const projection = selectedProjection as ExecutableVectorProjection<
+    Documents[Kind]["value"]["Type"]
+  >
 
   return Effect.gen(function*() {
     // SAFETY: parseDocumentInstance used this exact document definition and
@@ -587,8 +601,8 @@ export const projectParsedDocument = <
     const output = yield* Effect.sync(() =>
       projection.select(document.value),
     )
-    const projectedDocument = yield* Schema.validate(
-      ProjectedDocumentOutputSchema,
+    const projectedDocument = yield* Schema.decodeEffect(
+      Schema.toType(ProjectedDocumentOutputSchema),
     )(output, { onExcessProperty: "error" }).pipe(
       Effect.mapError(() =>
         projectionOutputError(
@@ -655,8 +669,10 @@ export const projectDocument = <
 > => {
   const definition = documents[documentKind]
   if (definition === undefined) {
-    return Effect.dieMessage(
-      `Unknown document kind ${documentKind} for graph ${graph}`,
+    return Effect.die(
+      new Error(
+        `Unknown document kind ${documentKind} for graph ${graph}`,
+      ),
     )
   }
 

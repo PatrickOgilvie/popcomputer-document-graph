@@ -21,9 +21,10 @@ export type RetrievalStrategyInput =
     }
 
 /** Bounded final result count returned by one retrieval operation. */
-export const RetrievalResultLimitSchema = Schema.Number.pipe(
-  Schema.int(),
-  Schema.between(1, 1_000),
+export const RetrievalResultLimitSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 1, maximum: 1_000 }),
+).pipe(
   Schema.brand("RetrievalResultLimit"),
 )
 

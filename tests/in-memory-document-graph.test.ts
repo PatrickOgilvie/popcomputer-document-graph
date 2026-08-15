@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either, Layer, Option, Schema } from "effect"
+import { Effect, Result, Layer, Option, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -16,15 +16,17 @@ import {
 } from "../src/adapter.js"
 import { inMemoryDocumentGraph } from "../src/in-memory.js"
 
-const ArticleId = Schema.UUID.pipe(Schema.brand("InMemoryArticleId"))
-const Visibility = Schema.Literal("public", "private")
+const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("InMemoryArticleId"),
+)
+const Visibility = Schema.Literals(["public", "private"])
 const Article = Schema.Struct({
   id: ArticleId,
-  title: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
   sections: Schema.NonEmptyArray(
     Schema.Struct({
-      id: Schema.NonEmptyTrimmedString,
-      content: Schema.NonEmptyTrimmedString,
+      id: Schema.Trimmed.check(Schema.isNonEmpty()),
+      content: Schema.Trimmed.check(Schema.isNonEmpty()),
       visibility: Visibility,
     }),
   ),
@@ -107,7 +109,7 @@ const makeEmbeddings = () => {
 }
 
 const projectChunkRecord = (
-  chunk: Effect.Effect.Success<
+  chunk: Effect.Success<
     ReturnType<typeof ArticleContent.project>
   >["chunks"][number],
 ): ProjectedChunkRecord => ({
@@ -416,12 +418,12 @@ describe("inMemoryDocumentGraph", () => {
             chunks,
             embeddings: [],
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       }).pipe(Effect.provide(live)),
     )
 
     expect(conflict).toEqual(
-      Either.left(
+      Result.fail(
         new ProjectionIndexConflict({
           documentKey: revision.documentKey,
           projection: revision.projection.id,
@@ -467,12 +469,12 @@ describe("inMemoryDocumentGraph", () => {
             chunks,
             embeddings: [],
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       }).pipe(Effect.provide(inMemoryDocumentGraph())),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new ProjectionIndexStoreFailed({
           operation: "replace_revision",
           reason: "invalid_stored_state",
@@ -526,13 +528,13 @@ describe("inMemoryDocumentGraph", () => {
             ...replacement,
             chunks: [first, { ...second, ordinal: first.ordinal }],
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
         const blankContent = yield* projections
           .replaceRevision({
             ...replacement,
             chunks: [{ ...first, content: " " }],
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
         const mismatchedSource = yield* relations
           .replaceOutgoing({
             graph: revision.encodedTarget.graph,
@@ -543,14 +545,14 @@ describe("inMemoryDocumentGraph", () => {
             },
             relations: [],
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
 
         return { duplicateOrdinal, blankContent, mismatchedSource }
       }).pipe(Effect.provide(inMemoryDocumentGraph())),
     )
 
     expect(result.duplicateOrdinal).toEqual(
-      Either.left(
+      Result.fail(
         new ProjectionIndexStoreFailed({
           operation: "replace_revision",
           reason: "invalid_stored_state",
@@ -559,7 +561,7 @@ describe("inMemoryDocumentGraph", () => {
       ),
     )
     expect(result.blankContent).toEqual(
-      Either.left(
+      Result.fail(
         new ProjectionIndexStoreFailed({
           operation: "replace_revision",
           reason: "invalid_stored_state",
@@ -568,7 +570,7 @@ describe("inMemoryDocumentGraph", () => {
       ),
     )
     expect(result.mismatchedSource).toEqual(
-      Either.left(
+      Result.fail(
         new GraphRelationStoreFailed({
           operation: "replace_outgoing",
           reason: "invalid_stored_state",

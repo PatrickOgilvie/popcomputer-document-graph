@@ -1,26 +1,26 @@
 import { Effect, Schema, type Tracer } from "effect"
 
 /** Public operations that may depend on document-graph infrastructure. */
-export const DocumentGraphOperationSchema = Schema.Literal(
+export const DocumentGraphOperationSchema = Schema.Literals([
   "index",
   "remove",
   "reconcile_index",
   "search",
   "hydrate",
   "neighbours",
-)
+])
 
 /** Public operations that may depend on document-graph infrastructure. */
 export type DocumentGraphOperation = typeof DocumentGraphOperationSchema.Type
 
 /** Stable, non-sensitive categories for unavailable graph operations. */
-export const DocumentGraphUnavailableReasonSchema = Schema.Literal(
+export const DocumentGraphUnavailableReasonSchema = Schema.Literals([
   "embedding_failed",
   "storage_failed",
   "hydration_failed",
   "invalid_stored_data",
   "invalid_adapter_output",
-)
+])
 
 /** Stable, non-sensitive categories for unavailable graph operations. */
 export type DocumentGraphUnavailableReason =

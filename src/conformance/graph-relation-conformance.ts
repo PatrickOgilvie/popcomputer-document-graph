@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import {
   DocumentKeySchema,
   type DocumentKey,
@@ -17,7 +17,7 @@ import {
 } from "../graph/graph-relation.js"
 
 /** Persistence laws checked against every graph-relation adapter. */
-export const GraphRelationStoreConformanceLawSchema = Schema.Literal(
+export const GraphRelationStoreConformanceLawSchema = Schema.Literals([
   "complete_replacement",
   "bidirectional_traversal",
   "bounded_ordering",
@@ -25,7 +25,7 @@ export const GraphRelationStoreConformanceLawSchema = Schema.Literal(
   "invalid_replacement_atomicity",
   "idempotent_node_deletion",
   "schema_pruning",
-)
+])
 
 /** Persistence law checked against every graph-relation adapter. */
 export type GraphRelationStoreConformanceLaw =
@@ -258,10 +258,10 @@ export const verifyGraphRelationStoreConformance = () =>
         ...fixture.reduced,
         relations: [reducedRelation, reducedRelation],
       })
-      .pipe(Effect.either)
+      .pipe(Effect.result)
     if (
-      !Either.isLeft(invalid) ||
-      invalid.left.reason !== "invalid_stored_state"
+      !Result.isFailure(invalid) ||
+      invalid.failure.reason !== "invalid_stored_state"
     ) {
       return yield* Effect.fail(
         violation("invalid_replacement_atomicity"),

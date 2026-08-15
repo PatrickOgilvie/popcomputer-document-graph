@@ -9,7 +9,7 @@ import {
   sectionChunking,
   type EmbeddingProviderService,
 } from "../src/adapter.js"
-import { Effect, Either, Layer, Option, Schema } from "effect"
+import { Effect, Result, Layer, Option, Schema } from "effect"
 import { Pool } from "pg"
 import { postgresDocumentGraph } from "../src/postgres.js"
 import { verifyDocumentGraphStorageConformance } from "../src/testing.js"
@@ -21,17 +21,19 @@ const runIntegrationTests =
   Bun.env.RUN_DOCUMENT_GRAPH_POSTGRES_TESTS === "true" &&
   databaseUrl !== undefined
 
-const ArticleId = Schema.UUID.pipe(Schema.brand("PostgresArticleId"))
-const Visibility = Schema.Literal("public", "private")
+const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("PostgresArticleId"),
+)
+const Visibility = Schema.Literals(["public", "private"])
 const Article = Schema.Struct({
   id: ArticleId,
-  title: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
   relatedIds: Schema.Array(ArticleId),
   sections: Schema.NonEmptyArray(
     Schema.Struct({
-      id: Schema.NonEmptyTrimmedString,
-      label: Schema.NonEmptyTrimmedString,
-      text: Schema.NonEmptyTrimmedString,
+      id: Schema.Trimmed.check(Schema.isNonEmpty()),
+      label: Schema.Trimmed.check(Schema.isNonEmpty()),
+      text: Schema.Trimmed.check(Schema.isNonEmpty()),
       visibility: Visibility,
     }),
   ),
@@ -279,7 +281,7 @@ describe("postgresDocumentGraph", () => {
                 ...staleRest.map(chunkRecord),
               ],
               embeddings: [],
-            }).pipe(Effect.either)
+            }).pipe(Effect.result)
             return {
               conformance,
               first,
@@ -351,9 +353,9 @@ describe("postgresDocumentGraph", () => {
         expect(result.finalHits.map((hit) => hit.sectionKey)).toEqual([
           "results",
         ])
-        expect(Either.isLeft(result.staleWrite)).toBe(true)
-        if (Either.isLeft(result.staleWrite)) {
-          expect(result.staleWrite.left._tag).toBe("ProjectionIndexConflict")
+        expect(Result.isFailure(result.staleWrite)).toBe(true)
+        if (Result.isFailure(result.staleWrite)) {
+          expect(result.staleWrite.failure._tag).toBe("ProjectionIndexConflict")
         }
         expect(embeddedBatches).toHaveLength(1)
 
@@ -393,7 +395,7 @@ describe("postgresDocumentGraph", () => {
             `UPDATE "${schema}"."projected_chunks"
              SET embedding = ARRAY[1.0]::double precision[]`,
           )
-        } catch (_cause: unknown) {
+        } catch {
           rejectedWrongDimensions = true
         }
         expect(rejectedWrongDimensions).toBe(true)
@@ -455,56 +457,47 @@ describe("postgresDocumentGraph", () => {
               strategy: "text",
             }).pipe(
               Effect.provide(invalidStoredLive),
-              Effect.either,
+              Effect.result,
             ),
           )
-          expect(Either.isLeft(invalidStoredResult)).toBe(true)
-          if (Either.isLeft(invalidStoredResult)) {
-            expect(invalidStoredResult.left._tag).toBe(
+          expect(Result.isFailure(invalidStoredResult)).toBe(true)
+          if (Result.isFailure(invalidStoredResult)) {
+            expect(invalidStoredResult.failure._tag).toBe(
               "DocumentGraphUnavailable",
             )
             if (
-              invalidStoredResult.left._tag === "DocumentGraphUnavailable"
+              invalidStoredResult.failure._tag === "DocumentGraphUnavailable"
             ) {
-              expect(invalidStoredResult.left.reason).toBe(
+              expect(invalidStoredResult.failure.reason).toBe(
                 "invalid_stored_data",
               )
-              const cause = invalidStoredResult.left.cause
+              const cause = invalidStoredResult.failure.cause
+              expect(cause).toBeInstanceOf(Object)
+              const causeTag = cause instanceof Object
+                ? Object.getOwnPropertyDescriptor(cause, "_tag")?.value
+                : undefined
+              expect(causeTag).toBe("ProjectionTextSearchStoreFailed")
+              const storedCause = cause instanceof Object
+                ? Object.getOwnPropertyDescriptor(cause, "cause")?.value
+                : undefined
+              expect(storedCause).toBeInstanceOf(Object)
+              const rowKind = storedCause instanceof Object
+                ? Object.getOwnPropertyDescriptor(storedCause, "rowKind")?.value
+                : undefined
+              expect(rowKind).toBe("text candidate")
+              const issues = storedCause instanceof Object
+                ? Object.getOwnPropertyDescriptor(storedCause, "issues")?.value
+                : undefined
+              expect(Array.isArray(issues)).toBe(true)
               expect(
-                typeof cause === "object" &&
-                  cause !== null &&
-                  "_tag" in cause
-                  ? cause._tag
-                  : undefined,
-              ).toBe("ProjectionTextSearchStoreFailed")
-              if (
-                typeof cause === "object" &&
-                cause !== null &&
-                "cause" in cause
-              ) {
-                const storedCause = cause.cause
-                expect(
-                  typeof storedCause === "object" &&
-                    storedCause !== null &&
-                    "rowKind" in storedCause
-                    ? storedCause.rowKind
-                    : undefined,
-                ).toBe("text candidate")
-                expect(
-                  typeof storedCause === "object" &&
-                    storedCause !== null &&
-                    "issues" in storedCause &&
-                    Array.isArray(storedCause.issues)
-                    ? storedCause.issues.some(
-                        (issue: unknown) =>
-                          typeof issue === "object" &&
-                          issue !== null &&
-                          "path" in issue &&
-                          issue.path === "content",
-                      )
-                    : false,
-                ).toBe(true)
-              }
+                Array.isArray(issues) &&
+                  issues.some(
+                    (issue) =>
+                      issue instanceof Object &&
+                      Object.getOwnPropertyDescriptor(issue, "path")?.value ===
+                        "content",
+                  ),
+              ).toBe(true)
             }
           }
         } finally {

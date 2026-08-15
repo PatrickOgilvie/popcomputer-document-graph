@@ -6,9 +6,9 @@ import {
 
 /** Article input accepted by indexing boundaries. */
 export const ArticleSchema = Schema.Struct({
-  id: Schema.UUID,
-  title: Schema.NonEmptyTrimmedString,
-  body: Schema.NonEmptyTrimmedString,
+  id: Schema.String.check(Schema.isUUID()),
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
+  body: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const ArticleDocument = defineDocument(ArticleSchema, { id: "id" }).vectorise({

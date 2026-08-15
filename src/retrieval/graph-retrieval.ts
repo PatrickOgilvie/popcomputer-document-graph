@@ -1,5 +1,8 @@
 import { Context, Effect, Schema } from "effect"
-import type { JsonValue } from "../document/json-value.js"
+import {
+  JsonValueSchema,
+  type JsonValue,
+} from "../document/json-value.js"
 import type { EncodedDocumentReference } from "../document/document-instance.js"
 import {
   makeChunkId,
@@ -47,11 +50,11 @@ export interface GraphSearchScopeInput<
   DocumentKind extends string,
   ProjectionId extends string = string,
 > {
-  readonly include?: ReadonlyArray<DocumentKind>
-  readonly exclude?: ReadonlyArray<DocumentKind>
-  readonly includeProjections?: ReadonlyArray<ProjectionId>
-  readonly excludeProjections?: ReadonlyArray<ProjectionId>
-  readonly where?: ReadonlyArray<MetadataFilter>
+  readonly include?: ReadonlyArray<DocumentKind> | undefined
+  readonly exclude?: ReadonlyArray<DocumentKind> | undefined
+  readonly includeProjections?: ReadonlyArray<ProjectionId> | undefined
+  readonly excludeProjections?: ReadonlyArray<ProjectionId> | undefined
+  readonly where?: ReadonlyArray<MetadataFilter> | undefined
 }
 
 /** Serializable constraints that every retrieval adapter must apply. */
@@ -138,9 +141,10 @@ export const projectionMatchesGraphSearchScope = (
 }
 
 /** Positive number of candidates or final results in one retrieval channel. */
-export const SearchResultCountSchema = Schema.Number.pipe(
-  Schema.int(),
-  Schema.between(1, 10_000),
+export const SearchResultCountSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 1, maximum: 10_000 }),
+).pipe(
   Schema.brand("SearchResultCount"),
 )
 
@@ -276,7 +280,7 @@ export interface TextSearchCandidate extends CandidateFields {}
 export class ProjectionSearchStoreFailed extends Schema.TaggedError<
   ProjectionSearchStoreFailed
 >()("ProjectionSearchStoreFailed", {
-  reason: Schema.Literal("unavailable", "invalid_stored_state"),
+  reason: Schema.Literals(["unavailable", "invalid_stored_state"]),
   cause: Schema.Unknown,
 }) {}
 
@@ -291,15 +295,16 @@ export interface ProjectionSearchStoreService {
 }
 
 /** Effect service tag for semantic candidate retrieval. */
-export class ProjectionSearchStore extends Context.Tag(
-  "@popcomputer/document-graph/ProjectionSearchStore",
-)<ProjectionSearchStore, ProjectionSearchStoreService>() {}
+export class ProjectionSearchStore extends Context.Service<
+  ProjectionSearchStore,
+  ProjectionSearchStoreService
+>()("@popcomputer/document-graph/ProjectionSearchStore") {}
 
 /** A text-search store could not retrieve lexical candidates. */
 export class ProjectionTextSearchStoreFailed extends Schema.TaggedError<
   ProjectionTextSearchStoreFailed
 >()("ProjectionTextSearchStoreFailed", {
-  reason: Schema.Literal("unavailable", "invalid_stored_state"),
+  reason: Schema.Literals(["unavailable", "invalid_stored_state"]),
   cause: Schema.Unknown,
 }) {}
 
@@ -314,28 +319,29 @@ export interface ProjectionTextSearchStoreService {
 }
 
 /** Effect service tag for text candidate retrieval. */
-export class ProjectionTextSearchStore extends Context.Tag(
-  "@popcomputer/document-graph/ProjectionTextSearchStore",
-)<ProjectionTextSearchStore, ProjectionTextSearchStoreService>() {}
+export class ProjectionTextSearchStore extends Context.Service<
+  ProjectionTextSearchStore,
+  ProjectionTextSearchStoreService
+>()("@popcomputer/document-graph/ProjectionTextSearchStore") {}
 
 /** A retrieval query did not satisfy the public search contract. */
 export class InvalidSearchQuery extends Schema.TaggedError<
   InvalidSearchQuery
 >()("InvalidSearchQuery", {
-  reason: Schema.Literal(
+  reason: Schema.Literals([
     "empty",
     "too_long",
     "text_disabled",
     "invalid_options",
-  ),
+  ]),
 }) {}
 
 /** A search adapter returned candidates that violated its contract. */
 export class InvalidSearchOutput extends Schema.TaggedError<
   InvalidSearchOutput
 >()("InvalidSearchOutput", {
-  channel: Schema.Literal("semantic", "text", "fusion"),
-  reason: Schema.Literal(
+  channel: Schema.Literals(["semantic", "text", "fusion"]),
+  reason: Schema.Literals([
     "too_many_candidates",
     "invalid_score",
     "invalid_content",
@@ -345,7 +351,7 @@ export class InvalidSearchOutput extends Schema.TaggedError<
     "out_of_scope",
     "not_ranked",
     "invalid_metadata",
-  ),
+  ]),
 }) {}
 
 /** Retrieval channels currently supported by projection search. */
@@ -782,12 +788,18 @@ const hybridOutputError = (
         : "invalid_score",
   })
 
+const JsonPrimitiveSchema = Schema.Union([
+  Schema.Null,
+  Schema.Boolean,
+  Schema.Finite,
+  Schema.String,
+])
+const JsonRecordSchema = Schema.Record(Schema.String, JsonValueSchema)
+
 const jsonValuesEqual = (left: JsonValue, right: JsonValue): boolean => {
   if (
-    left === null ||
-    right === null ||
-    typeof left !== "object" ||
-    typeof right !== "object"
+    Schema.is(JsonPrimitiveSchema)(left) ||
+    Schema.is(JsonPrimitiveSchema)(right)
   ) {
     return Object.is(left, right)
   }
@@ -804,10 +816,14 @@ const jsonValuesEqual = (left: JsonValue, right: JsonValue): boolean => {
   }
   if (Array.isArray(right)) return false
 
-  // SAFETY: Primitive, null, and array branches were eliminated above, so
-  // both JSON values are records whose values remain JSON-safe.
-  const leftRecord = left as Readonly<Record<string, JsonValue>>
-  const rightRecord = right as Readonly<Record<string, JsonValue>>
+  if (
+    !Schema.is(JsonRecordSchema)(left) ||
+    !Schema.is(JsonRecordSchema)(right)
+  ) {
+    return false
+  }
+  const leftRecord = left
+  const rightRecord = right
   const leftKeys = Object.keys(leftRecord).sort()
   const rightKeys = Object.keys(rightRecord).sort()
   if (

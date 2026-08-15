@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -18,17 +18,21 @@ import {
 import { inMemoryDocumentGraph } from "../src/in-memory.js"
 import { makeChunkId } from "../src/document/document-identity.js"
 
-const AgencyId = Schema.UUID.pipe(Schema.brand("RetrievalPlanAgencyId"))
-const WorkId = Schema.UUID.pipe(Schema.brand("RetrievalPlanWorkId"))
+const AgencyId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("RetrievalPlanAgencyId"),
+)
+const WorkId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("RetrievalPlanWorkId"),
+)
 const Agency = Schema.Struct({
   id: AgencyId,
-  name: Schema.NonEmptyTrimmedString,
-  profile: Schema.NonEmptyTrimmedString,
+  name: Schema.Trimmed.check(Schema.isNonEmpty()),
+  profile: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 const Work = Schema.Struct({
   id: WorkId,
-  title: Schema.NonEmptyTrimmedString,
-  evidence: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
+  evidence: Schema.Trimmed.check(Schema.isNonEmpty()),
   agencyIds: Schema.Array(AgencyId),
 })
 
@@ -179,16 +183,16 @@ describe("graph retrieval plans", () => {
 
     const results = await Effect.runPromise(
       Effect.forEach(operations, (operation) =>
-        operation.pipe(Effect.either),
+        operation.pipe(Effect.result),
       ).pipe(Effect.provide(live)),
     )
 
     for (const result of results) {
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("InvalidSearchQuery")
-        if (result.left._tag === "InvalidSearchQuery") {
-          expect(result.left.reason).toBe("invalid_options")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("InvalidSearchQuery")
+        if (result.failure._tag === "InvalidSearchQuery") {
+          expect(result.failure.reason).toBe("invalid_options")
         }
       }
     }
@@ -427,7 +431,7 @@ describe("graph retrieval plans", () => {
   })
 })
 
-if (false) {
+if (import.meta.url === "") {
   const relatedTextAction: Effect.Effect<
     unknown,
     SearchDocumentGraphError,

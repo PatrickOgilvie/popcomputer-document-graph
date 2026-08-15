@@ -1,11 +1,11 @@
 import { Schema } from "effect"
 
 /** Projected text channels understood by storage-neutral lexical search. */
-export const TextSearchFieldSchema = Schema.Literal(
+export const TextSearchFieldSchema = Schema.Literals([
   "context",
   "label",
   "content",
-)
+])
 
 /** Projected text channel understood by storage-neutral lexical search. */
 export type TextSearchField = Schema.Schema.Type<
@@ -13,10 +13,10 @@ export type TextSearchField = Schema.Schema.Type<
 >
 
 /** Text configurations supported by the included PostgreSQL adapter. */
-export const TextSearchLanguageSchema = Schema.Literal(
+export const TextSearchLanguageSchema = Schema.Literals([
   "english",
   "simple",
-)
+])
 
 /** Text configuration supported by the included PostgreSQL adapter. */
 export type TextSearchLanguage = Schema.Schema.Type<
@@ -25,8 +25,10 @@ export type TextSearchLanguage = Schema.Schema.Type<
 
 /** Bounded relative importance of one projected text channel. */
 export const TextSearchWeightSchema = Schema.Number.pipe(
-  Schema.finite(),
-  Schema.between(0, 100),
+  Schema.check(Schema.isFinite()),
+  Schema.check(
+    Schema.isBetween({ minimum: 0, maximum: 100 }),
+  ),
   Schema.brand("TextSearchWeight"),
 )
 
@@ -79,21 +81,24 @@ const EnabledTextSearchPolicyInputSchema = Schema.Struct({
   language: Schema.optional(TextSearchLanguageSchema),
   weights: Schema.optional(TextSearchWeightsInputSchema),
 }).pipe(
-  Schema.filter((input) => {
-    const context =
-      input.weights?.context ?? DefaultTextSearchWeights.context
-    const label = input.weights?.label ?? DefaultTextSearchWeights.label
-    const content =
-      input.weights?.content ?? DefaultTextSearchWeights.content
+  Schema.check(
+    Schema.makeFilter((input) => {
+      const context =
+        input.weights?.context ?? DefaultTextSearchWeights.context
+      const label =
+        input.weights?.label ?? DefaultTextSearchWeights.label
+      const content =
+        input.weights?.content ?? DefaultTextSearchWeights.content
 
-    return context > 0 || label > 0 || content > 0
-  }),
+      return context > 0 || label > 0 || content > 0
+    }),
+  ),
 )
 
-const TextSearchPolicyInputSchema = Schema.Union(
+const TextSearchPolicyInputSchema = Schema.Union([
   Schema.Literal("disabled"),
   EnabledTextSearchPolicyInputSchema,
-)
+])
 
 /** Parse and normalize text policy once at graph-definition time. */
 export const parseTextSearchPolicy = (

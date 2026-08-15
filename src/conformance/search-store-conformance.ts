@@ -60,7 +60,7 @@ export {
 } from "./graph-relation-conformance.js"
 
 /** Retrieval laws checked against every candidate-store adapter. */
-export const SearchStoreConformanceLawSchema = Schema.Literal(
+export const SearchStoreConformanceLawSchema = Schema.Literals([
   "scope_before_limit",
   "candidate_bound",
   "score_order",
@@ -69,7 +69,7 @@ export const SearchStoreConformanceLawSchema = Schema.Literal(
   "positive_text_score",
   "stable_ties",
   "repeatability",
-)
+])
 
 /** Retrieval law checked against every candidate-store adapter. */
 export type SearchStoreConformanceLaw =
@@ -79,7 +79,7 @@ export type SearchStoreConformanceLaw =
 export class SearchStoreConformanceViolation extends Schema.TaggedError<
   SearchStoreConformanceViolation
 >()("SearchStoreConformanceViolation", {
-  channel: Schema.Literal("semantic", "text"),
+  channel: Schema.Literals(["semantic", "text"]),
   law: SearchStoreConformanceLawSchema,
 }) {}
 

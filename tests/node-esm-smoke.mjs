@@ -1,3 +1,5 @@
+import { Schema } from "effect"
+
 const [core, adapter, inMemory, postgres, testing] = await Promise.all([
   import("@popcomputer/document-graph"),
   import("@popcomputer/document-graph/adapter"),
@@ -7,17 +9,18 @@ const [core, adapter, inMemory, postgres, testing] = await Promise.all([
 ])
 
 if (
-  typeof core.defineDocumentGraph !== "function" ||
-  typeof core.DocumentGraphUnavailable !== "function" ||
-  typeof core.toDocumentGraphErrorTelemetry !== "function" ||
-  typeof core.GraphRelationIdSchema !== "function" ||
-  typeof adapter.makeDocumentGraphStorage !== "function" ||
-  typeof adapter.EmbeddingProviderFailed !== "function" ||
-  typeof adapter.GraphRelationStore !== "function" ||
-  typeof inMemory.inMemoryDocumentGraph !== "function" ||
-  typeof postgres.postgresDocumentGraph !== "function" ||
-  typeof testing.verifyTextSearchStoreConformance !== "function" ||
-  typeof testing.verifyDocumentGraphStorageConformance !== "function"
+  !(core.defineDocumentGraph instanceof Function) ||
+  !(core.DocumentGraphUnavailable instanceof Function) ||
+  !(core.toDocumentGraphErrorTelemetry instanceof Function) ||
+  !Schema.isSchema(core.GraphRelationIdSchema) ||
+  !(adapter.makeDocumentGraphStorage instanceof Function) ||
+  !(adapter.EmbeddingProviderFailed instanceof Function) ||
+  adapter.GraphRelationStore.key !==
+    "@popcomputer/document-graph/GraphRelationStore" ||
+  !(inMemory.inMemoryDocumentGraph instanceof Function) ||
+  !(postgres.postgresDocumentGraph instanceof Function) ||
+  !(testing.verifyTextSearchStoreConformance instanceof Function) ||
+  !(testing.verifyDocumentGraphStorageConformance instanceof Function)
 ) {
   throw new Error("The published Node.js entry points are incomplete")
 }

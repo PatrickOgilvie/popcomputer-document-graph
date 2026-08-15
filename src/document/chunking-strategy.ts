@@ -5,21 +5,25 @@ import {
 } from "./json-value.js"
 
 /** Stable identifier for one reusable chunking implementation. */
-export const ChunkerIdSchema = Schema.NonEmptyTrimmedString.pipe(
-  Schema.maxLength(100),
-  Schema.pattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+export const ChunkerIdSchema = Schema.Trimmed.pipe(
+  Schema.check(Schema.isNonEmpty()),
+  Schema.check(Schema.isMaxLength(100)),
+  Schema.check(Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/)),
 )
 
 /** Stable version for one chunking implementation and its semantics. */
-export const ChunkerVersionSchema = Schema.NonEmptyTrimmedString.pipe(
-  Schema.maxLength(100),
-  Schema.pattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+export const ChunkerVersionSchema = Schema.Trimmed.pipe(
+  Schema.check(Schema.isNonEmpty()),
+  Schema.check(Schema.isMaxLength(100)),
+  Schema.check(Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/)),
 )
 
 /** Bounded size of one chunk submitted to an embedding model. */
 export const ChunkMaximumCharactersSchema = Schema.Number.pipe(
-  Schema.int(),
-  Schema.between(128, 16_000),
+  Schema.check(Schema.isInt()),
+  Schema.check(
+    Schema.isBetween({ minimum: 128, maximum: 16_000 }),
+  ),
   Schema.brand("ChunkMaximumCharacters"),
 )
 
@@ -61,7 +65,7 @@ export interface ChunkingStrategyDescriptor {
 }
 
 /** Runtime shape retained by every configured chunking strategy. */
-export interface ChunkingStrategyShape {
+export interface ChunkingStrategyRuntime {
   readonly id: string
   readonly version: string
   readonly config: unknown
@@ -77,7 +81,7 @@ export interface ChunkingStrategy<
   Id extends string = string,
   Version extends string = string,
   Config = unknown,
-> extends ChunkingStrategyShape {
+> extends ChunkingStrategyRuntime {
   readonly id: Id
   readonly version: Version
   readonly config: Config
@@ -94,16 +98,16 @@ export interface ChunkerInput<Config> {
 export interface DefineChunkerInput<
   Id extends string,
   Version extends string,
-  ConfigSchema extends Schema.Schema.AnyNoContext,
+  ConfigSchema extends Schema.Codec<unknown, unknown>,
 > {
   readonly id: Id
   readonly version: Version
   readonly config: ConfigSchema
   readonly maximumCharacters: (
-    config: Schema.Schema.Type<ConfigSchema>,
+    config: ConfigSchema["Type"],
   ) => number
   readonly chunk: (
-    input: ChunkerInput<Schema.Schema.Type<ConfigSchema>>,
+    input: ChunkerInput<ConfigSchema["Type"]>,
   ) => ReadonlyArray<ChunkFragment>
 }
 
@@ -111,15 +115,15 @@ export interface DefineChunkerInput<
 export interface Chunker<
   Id extends string,
   Version extends string,
-  ConfigSchema extends Schema.Schema.AnyNoContext,
+  ConfigSchema extends Schema.Codec<unknown, unknown>,
 > {
   /** Parse configuration and create one executable strategy instance. */
   (
-    config: Schema.Schema.Encoded<ConfigSchema>,
+    config: Schema.Codec.Encoded<ConfigSchema>,
   ): ChunkingStrategy<
     Id,
     Version,
-    Schema.Schema.Type<ConfigSchema>
+    ConfigSchema["Type"]
   >
 
   readonly id: Id
@@ -136,7 +140,7 @@ export interface Chunker<
 export const defineChunker = <
   const Id extends string,
   const Version extends string,
-  ConfigSchema extends Schema.Schema.AnyNoContext,
+  ConfigSchema extends Schema.Codec<unknown, unknown>,
 >(
   definition: DefineChunkerInput<Id, Version, ConfigSchema>,
 ): Chunker<Id, Version, ConfigSchema> => {
@@ -144,11 +148,11 @@ export const defineChunker = <
   Schema.decodeSync(ChunkerVersionSchema)(definition.version)
 
   const configure = (
-    configInput: Schema.Schema.Encoded<ConfigSchema>,
+    configInput: Schema.Codec.Encoded<ConfigSchema>,
   ): ChunkingStrategy<
     Id,
     Version,
-    Schema.Schema.Type<ConfigSchema>
+    ConfigSchema["Type"]
   > => {
     const config = Schema.decodeUnknownSync(definition.config)(
       configInput,

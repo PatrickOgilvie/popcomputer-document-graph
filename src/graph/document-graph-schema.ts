@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import type { ChunkingStrategyDescriptor } from "../document/chunking-strategy.js"
 import type { DocumentDefinitions } from "../document/document-definition.js"
-import type { VectorProjectionShape } from "../document/vector-projection.js"
+import type { RegisteredVectorProjection } from "../document/vector-projection.js"
 import {
   GraphRelationIdSchema,
   GraphRelationVersionSchema,
@@ -46,7 +46,7 @@ type ManifestProjection =
   DocumentGraphManifest["documents"][number]["projections"][number]
 
 const projectTextPolicy = (
-  policy: VectorProjectionShape["text"],
+  policy: RegisteredVectorProjection["text"],
 ): ManifestProjection["text"] =>
   policy === "disabled"
     ? "disabled"

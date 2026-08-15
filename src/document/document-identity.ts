@@ -10,8 +10,8 @@ import type {
 
 /** Lowercase SHA-256 digest encoded as 64 hexadecimal characters. */
 export const Sha256HexSchema = Schema.String.pipe(
-  Schema.length(64),
-  Schema.pattern(/^[0-9a-f]{64}$/),
+  Schema.check(Schema.isLengthBetween(64, 64)),
+  Schema.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
 )
 
 /** Stable storage identity for one graph document node. */
@@ -54,7 +54,7 @@ export class InvalidDocumentIdentity extends Schema.TaggedError<
 >()("InvalidDocumentIdentity", {
   graph: Schema.String,
   documentKind: Schema.String,
-  reason: Schema.Literal("cannot_encode_id", "id_not_json"),
+  reason: Schema.Literals(["cannot_encode_id", "id_not_json"]),
 }) {}
 
 const primitiveJson = (
@@ -68,13 +68,15 @@ const primitiveJson = (
   return encoded
 }
 
+const JsonPrimitiveSchema = Schema.Union([
+  Schema.Null,
+  Schema.Boolean,
+  Schema.Finite,
+  Schema.String,
+])
+
 const canonicalJson = (value: JsonValue): string => {
-  if (
-    value === null ||
-    typeof value === "boolean" ||
-    typeof value === "number" ||
-    typeof value === "string"
-  ) {
+  if (Schema.is(JsonPrimitiveSchema)(value)) {
     return primitiveJson(value)
   }
 
@@ -106,14 +108,14 @@ const hashJson = (value: JsonValue): string =>
 
 /** Encode one parsed document ID through its owning Effect Schema. */
 export const encodeDocumentId = <
-  IdSchema extends Schema.Schema.AnyNoContext,
+  IdSchema extends Schema.Codec<unknown, unknown>,
 >(
   graph: string,
   documentKind: string,
   schema: IdSchema,
   id: Schema.Schema.Type<IdSchema>,
 ): Effect.Effect<JsonValue, InvalidDocumentIdentity> =>
-  Schema.encode(schema)(id).pipe(
+  Schema.encodeEffect(schema)(id).pipe(
     Effect.mapError(
       () =>
         new InvalidDocumentIdentity({
@@ -123,7 +125,7 @@ export const encodeDocumentId = <
         }),
     ),
     Effect.flatMap((encoded) =>
-      Schema.decodeUnknown(JsonValueSchema)(encoded, {
+      Schema.decodeUnknownEffect(JsonValueSchema)(encoded, {
         onExcessProperty: "error",
       }).pipe(
         Effect.mapError(

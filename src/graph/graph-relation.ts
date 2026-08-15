@@ -1,4 +1,4 @@
-import { Context, Effect, Either, Schema } from "effect"
+import { Context, Effect, Result, Schema } from "effect"
 import {
   type DocumentDefinitions,
   type DocumentId,
@@ -33,7 +33,7 @@ export interface GraphRelationDefinition<
 }
 
 /** Minimum runtime shape retained for every graph relation declaration. */
-export interface GraphRelationDefinitionShape {
+export interface RegisteredGraphRelationDefinition {
   readonly from: string
   readonly to: string
   readonly version: string
@@ -42,7 +42,7 @@ export interface GraphRelationDefinitionShape {
 
 /** Runtime relation registry compiled from one graph schema. */
 export type GraphRelationDefinitions = Readonly<
-  Record<string, GraphRelationDefinitionShape>
+  Record<string, RegisteredGraphRelationDefinition>
 >
 
 /** Contextual builder used while declaring relations for one document graph. */
@@ -72,25 +72,29 @@ export class InvalidGraphRelationOutput extends Schema.TaggedError<
   graph: Schema.String,
   documentKind: Schema.String,
   relation: Schema.String,
-  reason: Schema.Literal("invalid_targets", "duplicate_target"),
+  reason: Schema.Literals(["invalid_targets", "duplicate_target"]),
 }) {}
 
 /** Stable identifier for one directed relation declared by a graph schema. */
-export const GraphRelationIdSchema = Schema.NonEmptyTrimmedString.pipe(
-  Schema.maxLength(100),
-  Schema.pattern(/^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$/),
+export const GraphRelationIdSchema = Schema.Trimmed.check(
+  Schema.isNonEmpty(),
+).pipe(
+  Schema.check(Schema.isMaxLength(100)),
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$/)),
 )
 
 /** Version of the persisted semantics for one directed relation. */
-export const GraphRelationVersionSchema = Schema.NonEmptyTrimmedString.pipe(
-  Schema.maxLength(100),
-  Schema.pattern(/^[a-z0-9]+([._-][a-z0-9]+)*$/),
+export const GraphRelationVersionSchema = Schema.Trimmed.check(
+  Schema.isNonEmpty(),
+).pipe(
+  Schema.check(Schema.isMaxLength(100)),
+  Schema.check(Schema.isPattern(/^[a-z0-9]+([._-][a-z0-9]+)*$/)),
 )
 
 /** Maximum number of neighbours returned by one bounded traversal. */
 export const GraphNeighbourLimitSchema = Schema.Number.pipe(
-  Schema.int(),
-  Schema.between(1, 1_000),
+  Schema.check(Schema.isInt()),
+  Schema.check(Schema.isBetween({ minimum: 1, maximum: 1_000 })),
   Schema.brand("GraphNeighbourLimit"),
 )
 
@@ -150,12 +154,12 @@ export const makeGraphRelationEdgeIdentity = (input: {
 /** Validate and flatten one complete outgoing-relation replacement. */
 export const planOutgoingGraphRelationReplacement = (
   replacement: ReplaceOutgoingGraphRelations,
-): Either.Either<
+): Result.Result<
   OutgoingGraphRelationReplacementPlan,
   OutgoingGraphRelationReplacementIssue
 > => {
   if (replacement.source.graph !== replacement.graph) {
-    return Either.left("source_graph_mismatch")
+    return Result.fail("source_graph_mismatch")
   }
 
   const relationIds = new Set<string>()
@@ -163,16 +167,16 @@ export const planOutgoingGraphRelationReplacement = (
   const edges: Array<PlannedOutgoingGraphRelation> = []
   for (const relation of replacement.relations) {
     if (relationIds.has(relation.id)) {
-      return Either.left("duplicate_relation")
+      return Result.fail("duplicate_relation")
     }
     relationIds.add(relation.id)
 
     for (const target of relation.targets) {
       if (target.reference.graph !== replacement.graph) {
-        return Either.left("target_graph_mismatch")
+        return Result.fail("target_graph_mismatch")
       }
       if (target.reference.kind !== relation.targetDocumentKind) {
-        return Either.left("target_kind_mismatch")
+        return Result.fail("target_kind_mismatch")
       }
 
       const identity = makeGraphRelationEdgeIdentity({
@@ -180,7 +184,7 @@ export const planOutgoingGraphRelationReplacement = (
         targetDocumentKey: target.documentKey,
       })
       if (identities.has(identity)) {
-        return Either.left("duplicate_edge")
+        return Result.fail("duplicate_edge")
       }
       identities.add(identity)
       edges.push({
@@ -192,7 +196,7 @@ export const planOutgoingGraphRelationReplacement = (
     }
   }
 
-  return Either.right({ identities, edges })
+  return Result.succeed({ identities, edges })
 }
 
 /** Input for projecting every outgoing relation from one document value. */
@@ -233,8 +237,10 @@ export const projectOutgoingGraphRelationsForInstance = (
       ([relationId, relation]) => {
         const targetDefinition = input.documents[relation.to]
         if (targetDefinition === undefined) {
-          return Effect.dieMessage(
-            `Unknown relation target ${relation.to} for graph ${input.graph}`,
+          return Effect.die(
+            new Error(
+              `Unknown relation target ${relation.to} for graph ${input.graph}`,
+            ),
           )
         }
 
@@ -245,9 +251,9 @@ export const projectOutgoingGraphRelationsForInstance = (
         ) => ReadonlyArray<unknown>
         return Effect.sync(() => select(sourceValue)).pipe(
           Effect.flatMap((targets) =>
-            Schema.validate(Schema.Array(targetDefinition.id))(targets, {
-              onExcessProperty: "error",
-            }),
+            Schema.decodeEffect(
+              Schema.toType(Schema.Array(targetDefinition.id)),
+            )(targets, { onExcessProperty: "error" }),
           ),
           Effect.mapError(
             () =>
@@ -330,8 +336,10 @@ export const projectOutgoingGraphRelations = (
   Effect.gen(function*() {
     const definition = input.documents[input.documentKind]
     if (definition === undefined) {
-      return yield* Effect.dieMessage(
-        `Unknown document kind ${input.documentKind} for graph ${input.graph}`,
+      return yield* Effect.die(
+        new Error(
+          `Unknown document kind ${input.documentKind} for graph ${input.graph}`,
+        ),
       )
     }
 
@@ -435,14 +443,14 @@ export interface StoredGraphNeighbour {
 export class GraphRelationStoreFailed extends Schema.TaggedError<
   GraphRelationStoreFailed
 >()("GraphRelationStoreFailed", {
-  operation: Schema.Literal(
+  operation: Schema.Literals([
     "replace_outgoing",
     "delete_node",
     "prune_graph",
     "find_outgoing",
     "find_incoming",
-  ),
-  reason: Schema.Literal("unavailable", "invalid_stored_state"),
+  ]),
+  reason: Schema.Literals(["unavailable", "invalid_stored_state"]),
   cause: Schema.Unknown,
 }) {}
 
@@ -450,7 +458,7 @@ export class GraphRelationStoreFailed extends Schema.TaggedError<
 export class InvalidGraphNeighbourOutput extends Schema.TaggedError<
   InvalidGraphNeighbourOutput
 >()("InvalidGraphNeighbourOutput", {
-  reason: Schema.Literal("too_many", "duplicate", "not_ordered"),
+  reason: Schema.Literals(["too_many", "duplicate", "not_ordered"]),
 }) {}
 
 /** Persistence capability consumed by graph relation workflows. */
@@ -483,6 +491,7 @@ export interface GraphRelationStoreService {
 }
 
 /** Effect service tag for graph relation persistence and traversal. */
-export class GraphRelationStore extends Context.Tag(
-  "@popcomputer/document-graph/GraphRelationStore",
-)<GraphRelationStore, GraphRelationStoreService>() {}
+export class GraphRelationStore extends Context.Service<
+  GraphRelationStore,
+  GraphRelationStoreService
+>()("@popcomputer/document-graph/GraphRelationStore") {}

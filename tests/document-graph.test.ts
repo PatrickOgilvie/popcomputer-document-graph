@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import {
   ChunkMaximumCharactersSchema,
   DocumentChunkingFailed,
@@ -13,34 +13,34 @@ import {
   sectionChunking,
 } from "../src/adapter.js"
 
-const AgencyId = Schema.UUID.pipe(Schema.brand("AgencyId"))
-const WorkId = Schema.UUID.pipe(Schema.brand("WorkId"))
+const AgencyId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("AgencyId"))
+const WorkId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("WorkId"))
 
 const AgencySchema = Schema.Struct({
   id: AgencyId,
-  name: Schema.NonEmptyTrimmedString,
-  summary: Schema.NonEmptyTrimmedString,
+  name: Schema.Trimmed.check(Schema.isNonEmpty()),
+  summary: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const WorkSchema = Schema.Struct({
   id: WorkId,
-  title: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
   evidence: Schema.NonEmptyArray(
     Schema.Struct({
-      id: Schema.NonEmptyTrimmedString,
-      kind: Schema.Literal("challenge", "outcome"),
-      text: Schema.NonEmptyTrimmedString,
+      id: Schema.Trimmed.check(Schema.isNonEmpty()),
+      kind: Schema.Literals(["challenge", "outcome"]),
+      text: Schema.Trimmed.check(Schema.isNonEmpty()),
     }),
   ),
 })
 
 const WorkMetadata = Schema.Struct({
-  kind: Schema.Literal("challenge", "outcome"),
+  kind: Schema.Literals(["challenge", "outcome"]),
 })
 
 const ParagraphChunkingConfig = Schema.Struct({
   maximumCharacters: ChunkMaximumCharactersSchema,
-  separator: Schema.NonEmptyTrimmedString,
+  separator: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const paragraphChunking = defineChunker({
@@ -169,11 +169,11 @@ describe("defineDocumentGraph", () => {
         graph: "another-graph",
         kind: "Work",
         id: workId,
-      }).pipe(Effect.either),
+      }).pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidDocumentReference({ reason: "wrong_graph" }),
       ),
     )
@@ -268,8 +268,6 @@ describe("defineDocumentGraph", () => {
         },
       ],
     })
-    const target = WorkNode.ref(workId)
-
     const firstRevision = await Effect.runPromise(
       WorkEvidence.project(value),
     )
@@ -371,7 +369,7 @@ describe("defineDocumentGraph", () => {
     const chunks = revision.chunks
 
     const storageIdentity = chunks.map(
-      ({ documentKey, revisionHash, chunkId, contentHash, ...chunk }) =>
+      ({ documentKey: _documentKey, revisionHash: _revisionHash, chunkId: _chunkId, contentHash: _contentHash, ...chunk }) =>
         chunk,
     )
 
@@ -508,11 +506,11 @@ describe("defineDocumentGraph", () => {
   test("revises metadata without invalidating reusable embedding content", async () => {
     const MetadataValue = Schema.Struct({
       id: WorkId,
-      text: Schema.NonEmptyTrimmedString,
-      reviewStatus: Schema.Literal("source", "reviewed"),
+      text: Schema.Trimmed.check(Schema.isNonEmpty()),
+      reviewStatus: Schema.Literals(["source", "reviewed"]),
     })
     const Metadata = Schema.Struct({
-      reviewStatus: Schema.Literal("source", "reviewed"),
+      reviewStatus: Schema.Literals(["source", "reviewed"]),
     })
     const MetadataDocument = defineDocument({
       id: WorkId,
@@ -567,9 +565,9 @@ describe("defineDocumentGraph", () => {
   test("includes projected text and search policy in revision identity", async () => {
     const SearchValue = Schema.Struct({
       id: WorkId,
-      title: Schema.NonEmptyTrimmedString,
-      label: Schema.NonEmptyTrimmedString,
-      text: Schema.NonEmptyTrimmedString,
+      title: Schema.Trimmed.check(Schema.isNonEmpty()),
+      label: Schema.Trimmed.check(Schema.isNonEmpty()),
+      text: Schema.Trimmed.check(Schema.isNonEmpty()),
     })
     const focalContentChunking = defineChunker({
       id: "focal-content",
@@ -655,7 +653,7 @@ describe("defineDocumentGraph", () => {
   })
 
   test("hashes the exact embedding text with SHA-256", async () => {
-    const HashId = Schema.UUID.pipe(Schema.brand("HashId"))
+    const HashId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("HashId"))
     const HashValue = Schema.Struct({ id: HashId, text: Schema.String })
     const HashDocument = defineDocument({
       id: HashId,
@@ -772,11 +770,11 @@ describe("defineDocumentGraph", () => {
         .document("Work")
         .projection("duplicate-sections")
         .project(value)
-        .pipe(Effect.either),
+        .pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidVectorProjectionOutput({
           graph: "duplicate-test",
           documentKind: "Work",
@@ -931,11 +929,11 @@ describe("defineDocumentGraph", () => {
         .document("Work")
         .projection("throwing")
         .project(value)
-        .pipe(Effect.either),
+        .pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new DocumentChunkingFailed({
           graph: "throwing-catalog",
           documentKind: "Work",
@@ -960,11 +958,11 @@ describe("defineDocumentGraph", () => {
             },
           ],
         })
-        .pipe(Effect.either),
+        .pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidDocumentValue({
           graph: "catalog",
           documentKind: "Work",
@@ -976,7 +974,7 @@ describe("defineDocumentGraph", () => {
 
   test("rejects projection metadata that violates its schema", async () => {
     const StrictMetadata = Schema.Struct({
-      code: Schema.String.pipe(Schema.maxLength(3)),
+      code: Schema.String.pipe(Schema.check(Schema.isMaxLength(3))),
     })
     const StrictWorkDocument = defineDocument({
       id: WorkId,
@@ -1018,11 +1016,11 @@ describe("defineDocumentGraph", () => {
         .document("Work")
         .projection("strict-metadata")
         .project(value)
-        .pipe(Effect.either),
+        .pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidVectorProjectionOutput({
           graph: "strict-catalog",
           documentKind: "Work",
@@ -1049,11 +1047,11 @@ describe("defineDocumentGraph", () => {
     const result = await Effect.runPromise(
       WorkEvidence
         .project(value)
-        .pipe(Effect.either),
+        .pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new DocumentChunkingFailed({
           graph: "catalog",
           documentKind: "Work",
@@ -1073,7 +1071,7 @@ const agencyValue = Schema.decodeSync(AgencySchema)({
   summary: "An example agency profile.",
 })
 
-if (false) {
+if (import.meta.url === "") {
   // @ts-expect-error A Work reference requires a WorkId.
   WorkNode.ref(agencyId)
 

@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import {
   sectionChunking,
-  type ChunkingStrategyShape,
+  type ChunkingStrategyRuntime,
   type SectionChunkingStrategy,
 } from "./chunking-strategy.js"
 import {
@@ -11,16 +11,20 @@ import {
 } from "./text-search-policy.js"
 
 /** Stable identifier for one semantic projection of a document. */
-export const VectorProjectionIdSchema = Schema.NonEmptyTrimmedString.pipe(
-  Schema.maxLength(100),
-  Schema.pattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+export const VectorProjectionIdSchema = Schema.Trimmed.pipe(
+  Schema.check(Schema.isNonEmpty()),
+  Schema.check(Schema.isMaxLength(100)),
+  Schema.check(Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/)),
 )
 
 /** Stable version for one semantic projection and its text policy. */
 export const VectorProjectionVersionSchema =
-  Schema.NonEmptyTrimmedString.pipe(
-    Schema.maxLength(100),
-    Schema.pattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+  Schema.Trimmed.pipe(
+    Schema.check(Schema.isNonEmpty()),
+    Schema.check(Schema.isMaxLength(100)),
+    Schema.check(
+      Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+    ),
   )
 
 interface ProjectedSectionFields {
@@ -54,11 +58,11 @@ export interface ProjectedDocument<Metadata = never> {
 }
 
 /** Runtime shape retained for every registered vector projection. */
-export interface VectorProjectionShape {
+export interface RegisteredVectorProjection {
   readonly id: string
   readonly version: string
-  readonly chunking: ChunkingStrategyShape
-  readonly metadataSchema: Schema.Schema.AnyNoContext | undefined
+  readonly chunking: ChunkingStrategyRuntime
+  readonly metadataSchema: Schema.Codec<unknown, unknown> | undefined
   readonly text: TextSearchPolicy
 }
 
@@ -68,8 +72,8 @@ export interface VectorProjection<
   Metadata,
   Id extends string = string,
   Version extends string = string,
-  Chunking extends ChunkingStrategyShape = ChunkingStrategyShape,
-> extends VectorProjectionShape {
+  Chunking extends ChunkingStrategyRuntime = ChunkingStrategyRuntime,
+> extends RegisteredVectorProjection {
   readonly id: Id
   readonly version: Version
   readonly chunking: Chunking
@@ -77,7 +81,7 @@ export interface VectorProjection<
 }
 
 type MetadataType<MetadataSchema> =
-  MetadataSchema extends Schema.Schema.AnyNoContext
+  MetadataSchema extends Schema.Codec<unknown, unknown>
   ? Schema.Schema.Type<MetadataSchema>
   : never
 
@@ -86,8 +90,8 @@ export interface DefineVectorProjectionInput<
   Value,
   Id extends string,
   Version extends string,
-  MetadataSchema extends Schema.Schema.AnyNoContext | undefined,
-  Chunking extends ChunkingStrategyShape,
+  MetadataSchema extends Schema.Codec<unknown, unknown> | undefined,
+  Chunking extends ChunkingStrategyRuntime,
 > {
   readonly id: Id
   readonly version: Version
@@ -104,8 +108,8 @@ export const makeVectorProjection = <
   Value,
   const Id extends string,
   const Version extends string,
-  MetadataSchema extends Schema.Schema.AnyNoContext | undefined = undefined,
-  Chunking extends ChunkingStrategyShape = SectionChunkingStrategy,
+  MetadataSchema extends Schema.Codec<unknown, unknown> | undefined = undefined,
+  Chunking extends ChunkingStrategyRuntime = SectionChunkingStrategy,
 >(
   input: DefineVectorProjectionInput<
     Value,

@@ -8,25 +8,29 @@ import {
   type SearchHit,
 } from "@popcomputer/document-graph"
 
-const AgencyId = Schema.UUID.pipe(Schema.brand("AgencyId"))
-const WorkId = Schema.UUID.pipe(Schema.brand("WorkId"))
+const AgencyId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("AgencyId"),
+)
+const WorkId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("WorkId"),
+)
 
 const Agency = Schema.Struct({
   id: AgencyId,
-  name: Schema.NonEmptyTrimmedString,
-  summary: Schema.NonEmptyTrimmedString,
+  name: Schema.Trimmed.check(Schema.isNonEmpty()),
+  summary: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const Evidence = Schema.Struct({
-  id: Schema.NonEmptyTrimmedString,
-  kind: Schema.Literal("challenge", "approach", "outcome"),
-  text: Schema.NonEmptyTrimmedString,
+  id: Schema.Trimmed.check(Schema.isNonEmpty()),
+  kind: Schema.Literals(["challenge", "approach", "outcome"]),
+  text: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 /** Work input accepted by the example's indexing boundary. */
 export const WorkSchema = Schema.Struct({
   id: WorkId,
-  title: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
   agencyIds: Schema.Array(AgencyId),
   evidence: Schema.NonEmptyArray(Evidence),
 })

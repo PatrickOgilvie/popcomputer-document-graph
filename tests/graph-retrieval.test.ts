@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either, Layer, Schema } from "effect"
+import { Effect, Layer, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -32,25 +32,29 @@ import {
 } from "../src/adapter.js"
 import { parseTextSearchPolicy } from "../src/document/text-search-policy.js"
 
-const ArticleId = Schema.UUID.pipe(Schema.brand("RetrievalArticleId"))
-const NoteId = Schema.UUID.pipe(Schema.brand("RetrievalNoteId"))
+const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("RetrievalArticleId"),
+)
+const NoteId = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("RetrievalNoteId"),
+)
 const SearchMetadata = Schema.Struct({
-  visibility: Schema.Literal("public", "private"),
+  visibility: Schema.Literals(["public", "private"]),
 })
 const ArticleValue = Schema.Struct({
   id: ArticleId,
-  title: Schema.NonEmptyTrimmedString,
+  title: Schema.Trimmed.check(Schema.isNonEmpty()),
   sections: Schema.NonEmptyArray(
     Schema.Struct({
-      id: Schema.NonEmptyTrimmedString,
-      text: Schema.NonEmptyTrimmedString,
+      id: Schema.Trimmed.check(Schema.isNonEmpty()),
+      text: Schema.Trimmed.check(Schema.isNonEmpty()),
       visibility: SearchMetadata.fields.visibility,
     }),
   ),
 })
 const NoteValue = Schema.Struct({
   id: NoteId,
-  text: Schema.NonEmptyTrimmedString,
+  text: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
 const ArticleDocument = defineDocument({
@@ -147,7 +151,7 @@ const projectArticle = () => {
 }
 
 const makeCandidate = (
-  revision: Effect.Effect.Success<ReturnType<typeof projectArticle>>,
+  revision: Effect.Success<ReturnType<typeof projectArticle>>,
   index: number,
   score: number,
 ): SemanticSearchCandidate => {
@@ -340,12 +344,12 @@ describe("graph retrieval", () => {
         Effect.provide(
           Layer.succeed(ProjectionSearchStore, store.service),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidSearchOutput({
           channel: "semantic",
           reason: "invalid_identity",
@@ -374,12 +378,12 @@ describe("graph retrieval", () => {
         Effect.provide(
           Layer.succeed(ProjectionSearchStore, store.service),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidSearchOutput({
           channel: "semantic",
           reason: "invalid_identity",
@@ -430,12 +434,12 @@ describe("graph retrieval", () => {
         Effect.provide(
           Layer.succeed(ProjectionTextSearchStore, textStore),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidSearchOutput({
           channel: "fusion",
           reason: "conflicting_chunk",
@@ -469,12 +473,12 @@ describe("graph retrieval", () => {
         Effect.provide(
           Layer.succeed(ProjectionSearchStore, store.service),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidSearchOutput({
           channel: "semantic",
           reason: "out_of_scope",
@@ -499,12 +503,12 @@ describe("graph retrieval", () => {
         Effect.provide(
           Layer.succeed(ProjectionSearchStore, store.service),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(new InvalidSearchQuery({ reason: "empty" })),
+      Result.fail(new InvalidSearchQuery({ reason: "empty" })),
     )
     expect(embeddings.queries).toEqual([])
     expect(store.requests).toEqual([])
@@ -526,12 +530,12 @@ describe("graph retrieval", () => {
         Effect.provide(
           Layer.succeed(ProjectionSearchStore, store.service),
         ),
-        Effect.either,
+        Effect.result,
       ),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidEmbeddingOutput({
           profile: embeddingProfile.id,
           reason: "wrong_dimensions",
@@ -603,23 +607,21 @@ describe("graph retrieval", () => {
     const result = await Effect.runPromise(
       hydrateGrounding(hit).pipe(
         Effect.provide(Layer.succeed(GroundingHydrator, hydrator)),
-        Effect.either,
+        Effect.result,
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("DocumentGraphUnavailable")
-      expect(result.left.operation).toBe("hydrate")
-      expect(result.left.reason).toBe("invalid_adapter_output")
-      expect((result.left.cause as GroundingHydrationFailed)._tag).toBe(
-        "GroundingHydrationFailed",
-      )
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("DocumentGraphUnavailable")
+      expect(result.failure.operation).toBe("hydrate")
+      expect(result.failure.reason).toBe("invalid_adapter_output")
+      expect(result.failure.cause).toBeInstanceOf(GroundingHydrationFailed)
     }
   })
 })
 
-if (false) {
+if (import.meta.url === "") {
   // @ts-expect-error Search scopes only accept document kinds in this graph.
   retrievalScope({ exclude: ["UnknownDocument"] })
 }

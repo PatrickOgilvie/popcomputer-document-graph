@@ -52,7 +52,7 @@ const withTransaction = async <A>(
       } catch (cause) {
         try {
           await client.query("ROLLBACK")
-        } catch (_rollbackCause) {
+        } catch {
           // Preserve the failure that caused the transaction to roll back.
         }
         throw cause
@@ -73,7 +73,7 @@ const withTransaction = async <A>(
     try {
       await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
       await client.query(`RELEASE SAVEPOINT ${savepoint}`)
-    } catch (_rollbackCause) {
+    } catch {
       // Preserve the failure that caused the savepoint rollback.
     }
     throw cause

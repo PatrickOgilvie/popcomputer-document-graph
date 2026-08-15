@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Either, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import {
   InvalidRankFusionInput,
   ReciprocalRankConstantSchema,
@@ -98,11 +98,11 @@ describe("weightedReciprocalRankFusion", () => {
             { key: "duplicate", score: 0.8 },
           ]),
         ],
-      }).pipe(Effect.either),
+      }).pipe(Effect.result),
     )
 
     expect(result).toEqual(
-      Either.left(
+      Result.fail(
         new InvalidRankFusionInput({
           stream: "semantic",
           reason: "duplicate_key",

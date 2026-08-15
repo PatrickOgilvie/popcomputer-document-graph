@@ -1,6 +1,6 @@
 {
   "name": "@popcomputer/document-graph",
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "description": "Schema-defined document graphs with hybrid search, graph retrieval, and composable storage",
   "type": "module",
   "main": "./dist/index.js",
@@ -33,6 +33,7 @@
     "docs",
     "examples",
     "migrations",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
@@ -40,10 +41,11 @@
     "clean": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "build": "bun run clean && tsc",
     "check": "tsc --noEmit && tsc -p tsconfig.type-tests.json",
+    "lint": "oxlint",
     "test": "bun test",
     "test:node": "bun run build && node tests/node-esm-smoke.mjs",
     "test:types": "tsc -p tsconfig.type-tests.json",
-    "verify": "bun run check && bun test && bun run test:node",
+    "verify": "bun run lint && bun run check && bun test && bun run test:node",
     "prepack": "bun run build",
     "prepublishOnly": "bun run verify"
   },
@@ -56,6 +58,9 @@
   ],
   "author": "Patrick Ogilvie",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PatrickOgilvie/popcomputer-document-graph.git"
@@ -72,14 +77,14 @@
     "pg": "^8.16.3"
   },
   "peerDependencies": {
-    "effect": "^3.21.2"
+    "effect": "4.0.0-rc.109"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.15.5",
-    "effect": "^3.21.2",
-    "@popcomputer/web": "0.3.0-rc.1",
-    "hono": "^4.12.15",
+    "effect": "4.0.0-rc.109",
+    "oxlint": "1.78.0",
     "typescript": "^5.9.3"
   }
 }

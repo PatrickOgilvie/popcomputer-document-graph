@@ -2,24 +2,29 @@ import { Context, Effect, Schema } from "effect"
 import type { ContentHash } from "../document/document-identity.js"
 
 /** Stable identity for one embedding model and configuration. */
-export const EmbeddingProfileIdSchema = Schema.NonEmptyTrimmedString.pipe(
-  Schema.maxLength(200),
-  Schema.pattern(/^[a-z0-9]+(?:[._:/-][a-z0-9]+)*$/),
+export const EmbeddingProfileIdSchema = Schema.Trimmed.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(200),
+  Schema.isPattern(/^[a-z0-9]+(?:[._:/-][a-z0-9]+)*$/),
+).pipe(
   Schema.brand("EmbeddingProfileId"),
 )
 
 /** Stable version for one embedding profile's model and configuration. */
 export const EmbeddingProfileVersionSchema =
-  Schema.NonEmptyTrimmedString.pipe(
-    Schema.maxLength(100),
-    Schema.pattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+  Schema.Trimmed.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(100),
+    Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+  ).pipe(
     Schema.brand("EmbeddingProfileVersion"),
   )
 
 /** Positive vector dimensionality declared by an embedding profile. */
-export const EmbeddingDimensionsSchema = Schema.Number.pipe(
-  Schema.int(),
-  Schema.between(1, 65_536),
+export const EmbeddingDimensionsSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 1, maximum: 65_536 }),
+).pipe(
   Schema.brand("EmbeddingDimensions"),
 )
 
@@ -77,7 +82,7 @@ export class EmbeddingProviderFailed extends Schema.TaggedError<
   EmbeddingProviderFailed
 >()("EmbeddingProviderFailed", {
   profile: EmbeddingProfileIdSchema,
-  reason: Schema.Literal("unavailable", "invalid_response"),
+  reason: Schema.Literals(["unavailable", "invalid_response"]),
   cause: Schema.Unknown,
 }) {}
 
@@ -86,13 +91,13 @@ export class InvalidEmbeddingOutput extends Schema.TaggedError<
   InvalidEmbeddingOutput
 >()("InvalidEmbeddingOutput", {
   profile: EmbeddingProfileIdSchema,
-  reason: Schema.Literal(
+  reason: Schema.Literals([
     "missing_content",
     "unexpected_content",
     "duplicate_content",
     "wrong_dimensions",
     "invalid_number",
-  ),
+  ]),
 }) {}
 
 /** External embedding capability consumed by indexing and semantic search. */
@@ -113,6 +118,7 @@ export interface EmbeddingProviderService {
 }
 
 /** Effect service tag for the configured embedding provider. */
-export class EmbeddingProvider extends Context.Tag(
-  "@popcomputer/document-graph/EmbeddingProvider",
-)<EmbeddingProvider, EmbeddingProviderService>() {}
+export class EmbeddingProvider extends Context.Service<
+  EmbeddingProvider,
+  EmbeddingProviderService
+>()("@popcomputer/document-graph/EmbeddingProvider") {}

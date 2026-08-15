@@ -1,7 +1,13 @@
-import { Array as EffectArray, Effect, Schema } from "effect"
+import {
+  Array as EffectArray,
+  Effect,
+  Function as EffectFunction,
+  Predicate,
+  Schema,
+} from "effect"
 import type { DocumentReference } from "../document/document-reference.js"
 import type {
-  DocumentDefinitionShape,
+  RegisteredDocumentDefinition,
   DocumentDefinitions,
   DocumentId,
   DocumentKind,
@@ -74,12 +80,9 @@ import {
   ProjectionIndexStore,
   type IndexProjectedRevisionError,
   type IndexProjectedRevisionResult,
-  type ProjectionIndexStoreFailed,
 } from "../indexing/projection-index.js"
 import {
   EmbeddingProvider,
-  type EmbeddingProviderFailed,
-  type InvalidEmbeddingOutput,
 } from "../indexing/embedding-provider.js"
 import {
   documentGraphUnavailable,
@@ -102,7 +105,7 @@ import {
 } from "./graph-relation.js"
 import type {
   VectorProjection,
-  VectorProjectionShape,
+  RegisteredVectorProjection,
 } from "../document/vector-projection.js"
 import {
   InvalidDocumentReference,
@@ -771,6 +774,7 @@ export interface DocumentGraph<
 
   /** Parse an unknown persisted or protocol document reference. */
   readonly parseReference: (
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- This method is the decoding boundary for untrusted persisted or protocol input.
     input: unknown,
   ) => Effect.Effect<
     DocumentReference<GraphId, Documents>,
@@ -932,7 +936,7 @@ const projectionStrategyRequiresText = (
 ): boolean =>
   input === "text" ||
   input === "hybrid" ||
-  (typeof input === "object" && input.mode === "hybrid")
+  (input !== undefined && input !== "semantic" && input.mode === "hybrid")
 
 interface RuntimeProjectionSearchPlan {
   readonly strategy: RetrievalStrategy
@@ -987,27 +991,28 @@ const projectionSearchPlan = (
 const metadataFilters = <Metadata>(
   where: ProjectionSearchWhere<Metadata> | undefined,
 ): ReadonlyArray<MetadataFilter> => {
-  if (typeof where === "function") {
+  if (Predicate.isFunction(where)) {
     return [
       normalizeMetadataFilter(where(makeMetadataFilterBuilder<Metadata>())),
     ]
   }
 
   return Object.entries(where ?? {}).map(([key, condition]) => {
-    if (
-      typeof condition === "object" &&
-      condition !== null &&
-      "oneOf" in condition
-    ) {
+    if (Predicate.isObject(condition) && "oneOf" in condition) {
+      // SAFETY: ProjectionSearchWhereShorthand constrains the oneOf branch to a
+      // non-empty tuple of scalar metadata values.
+      const values = condition.oneOf as readonly [
+        MetadataSearchValue,
+        ...ReadonlyArray<MetadataSearchValue>,
+      ]
       return metadataOneOf(
         key,
-        condition.oneOf as readonly [
-          MetadataSearchValue,
-          ...ReadonlyArray<MetadataSearchValue>,
-        ],
+        values,
       )
     }
 
+    // SAFETY: ProjectionSearchWhereShorthand restricts non-oneOf conditions to
+    // scalar MetadataSearchValue entries.
     return metadataEquals(key, condition as MetadataSearchValue)
   })
 }
@@ -1053,12 +1058,13 @@ export const defineDocumentGraph = <
   }
 
   const parseReference = (
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- This function immediately decodes the boundary value with UnknownReferenceSchema.
     candidate: unknown,
   ): Effect.Effect<
     DocumentReference<GraphId, Documents>,
     InvalidDocumentReference
   > =>
-    Schema.decodeUnknown(UnknownReferenceSchema)(candidate, {
+    Schema.decodeUnknownEffect(UnknownReferenceSchema)(candidate, {
       onExcessProperty: "error",
     }).pipe(
       Effect.mapError(() => invalidReference("invalid_shape")),
@@ -1067,13 +1073,13 @@ export const defineDocumentGraph = <
           return Effect.fail(invalidReference("wrong_graph"))
         }
 
-        const definition: DocumentDefinitionShape | undefined =
+        const definition: RegisteredDocumentDefinition | undefined =
           input.documents[parsed.kind]
         if (definition === undefined) {
           return Effect.fail(invalidReference("unknown_document_kind"))
         }
 
-        return Schema.decodeUnknown(definition.id)(parsed.id).pipe(
+        return Schema.decodeUnknownEffect(definition.id)(parsed.id).pipe(
           Effect.mapError(() => invalidReference("invalid_document_id")),
           Effect.map((id) => {
             // SAFETY: The graph and kind were matched against this definition,
@@ -1093,8 +1099,10 @@ export const defineDocumentGraph = <
   ): Effect.Effect<DocumentKey, InvalidDocumentIdentity> => {
     const definition = input.documents[target.kind]
     if (definition === undefined) {
-      return Effect.dieMessage(
-        `Unknown document kind ${target.kind} for graph ${input.id}`,
+      return Effect.die(
+        new Error(
+          `Unknown document kind ${target.kind} for graph ${input.id}`,
+        ),
       )
     }
 
@@ -1155,7 +1163,7 @@ export const defineDocumentGraph = <
       const metadata =
         projection.metadataSchema === undefined
           ? undefined
-          : yield* Schema.decodeUnknown(projection.metadataSchema)(
+          : yield* Schema.decodeUnknownEffect(projection.metadataSchema)(
               hit.metadata,
               { onExcessProperty: "error" },
             ).pipe(
@@ -1168,19 +1176,17 @@ export const defineDocumentGraph = <
               ),
             )
 
+      const parsedHit = { ...hit, reference, metadata }
       // SAFETY: The reference, registered projection version, and projection
       // metadata schema all parsed before constructing the graph hit union.
-      return { ...hit, reference, metadata } as unknown as AnyGraphSearchHit<
-        GraphId,
-        Documents
-      >
+      return parsedHit as AnyGraphSearchHit<GraphId, Documents>
     })
 
   const searchProjectionRuntime = (inputSearch: {
     readonly query: string
     readonly semanticQuery?: SemanticQueryPreparation | undefined
     readonly documentKind: string
-    readonly projection: VectorProjectionShape
+    readonly projection: RegisteredVectorProjection
     readonly plan: RuntimeProjectionSearchPlan
     readonly where: ReadonlyArray<MetadataFilter>
   }): Effect.Effect<
@@ -1356,8 +1362,10 @@ export const defineDocumentGraph = <
       relation === undefined ||
       currentKind !== inputNeighbour.currentDocumentKind
     ) {
-      return Effect.dieMessage(
-        `Unknown ${inputNeighbour.direction} relation ${inputNeighbour.relationId} for ${inputNeighbour.currentDocumentKind}`,
+      return Effect.die(
+        new Error(
+          `Unknown ${inputNeighbour.direction} relation ${inputNeighbour.relationId} for ${inputNeighbour.currentDocumentKind}`,
+        ),
       )
     }
 
@@ -1511,9 +1519,7 @@ export const defineDocumentGraph = <
           },
         )
 
-      // SAFETY: projectionId was found in this document definition; its
-      // runtime version and operations therefore match ProjectionFor.
-      return {
+      const handle = {
         id: projectionId,
         version: registeredProjection.version,
         project: (value: DocumentValue<Documents, Kind>) =>
@@ -1575,13 +1581,18 @@ export const defineDocumentGraph = <
             )(options?.neighboursPerSource ?? 100),
           }
         },
-      } as unknown as GraphProjectionHandle<
+      }
+      // SAFETY: projectionId was found in this document definition; its
+      // runtime version and operations therefore match ProjectionFor.
+      // TypeScript cannot directly relate the runtime-validated projection ID
+      // to the corresponding mapped overloads on GraphProjectionHandle.
+      return EffectFunction.cast<typeof handle, GraphProjectionHandle<
         GraphId,
         Documents,
         Relations,
         Kind,
         ProjectionId
-      >
+      >>(handle)
     }
 
     return {
@@ -1638,17 +1649,7 @@ export const defineDocumentGraph = <
             "document_graph.graph": input.id,
             "document_graph.document_kind": kind,
           },
-        // SAFETY: Every projected revision was created from this definition's
-        // projections, so each ID is DocumentProjectionId<Documents, Kind>.
-        ) as Effect.Effect<
-          IndexGraphDocumentResult<
-            DocumentProjectionId<Documents, Kind>
-          >,
-          IndexGraphDocumentError,
-          | EmbeddingProvider
-          | ProjectionIndexStore
-          | GraphRelationStore
-        >,
+        ),
       remove: (id) =>
         Effect.gen(function*() {
           const projectionStore = yield* ProjectionIndexStore
@@ -1689,7 +1690,10 @@ export const defineDocumentGraph = <
             "document_graph.document_kind": kind,
           }),
         ),
-      neighbours: ((
+      // SAFETY: The implementation validates the selected relation against
+      // the current node and checks every parsed reference against the
+      // opposite kind before exposing its direction-specific overload.
+      neighbours: EffectFunction.cast((
         id: DocumentId<Documents, Kind>,
         options: {
           readonly via: keyof Relations & string
@@ -1702,13 +1706,15 @@ export const defineDocumentGraph = <
         const currentKind =
           direction === "outgoing" ? relation?.from : relation?.to
         if (relation === undefined || currentKind !== kind) {
-          return Effect.dieMessage(
-            `Unknown ${direction} relation ${options.via} for ${kind}`,
+          return Effect.die(
+            new Error(
+              `Unknown ${direction} relation ${options.via} for ${kind}`,
+            ),
           )
         }
 
         return Effect.gen(function*() {
-          const limit = yield* Schema.decodeUnknown(
+          const limit = yield* Schema.decodeUnknownEffect(
             GraphNeighbourLimitSchema,
           )(options.limit ?? 100).pipe(
             Effect.mapError(
@@ -1744,15 +1750,7 @@ export const defineDocumentGraph = <
             "document_graph.neighbours.limit": options.limit ?? 100,
           }),
         )
-        // SAFETY: The implementation validates the selected relation against
-        // the current node and checks every parsed reference against the
-        // opposite kind before exposing its direction-specific overload.
-      }) as unknown as GraphNeighbours<
-        GraphId,
-        Documents,
-        Relations,
-        Kind
-      >,
+      }),
     }
   }
 
@@ -1792,7 +1790,7 @@ export const defineDocumentGraph = <
       | RelationRetrievalRoute<string, string, string, string>
     type CompiledRuntimeRoute = {
       readonly route: RuntimeRoute
-      readonly projection: VectorProjectionShape
+      readonly projection: RegisteredVectorProjection
     }
     type Target = {
       readonly key: DocumentKey
@@ -1898,7 +1896,10 @@ export const defineDocumentGraph = <
     const rankConstant = Schema.decodeSync(
       ReciprocalRankConstantSchema,
     )(
-      typeof definition.strategy === "object"
+      definition.strategy !== undefined &&
+        definition.strategy !== "semantic" &&
+        definition.strategy !== "text" &&
+        definition.strategy !== "hybrid"
         ? definition.strategy.rankConstant ?? 60
         : 60,
     )
@@ -2154,7 +2155,7 @@ export const defineDocumentGraph = <
                 const orderedStreams = Array.from(item.streams.entries())
                   .sort(([left], [right]) => left.localeCompare(right))
                   .map(([, stream]) => stream)
-                if (!EffectArray.isNonEmptyReadonlyArray(orderedStreams)) {
+                if (!EffectArray.isReadonlyArrayNonEmpty(orderedStreams)) {
                   throw new Error(
                     "Retained graph evidence unexpectedly has no streams",
                   )
@@ -2165,7 +2166,7 @@ export const defineDocumentGraph = <
                   streams: orderedStreams,
                 }
               })
-            if (!EffectArray.isNonEmptyReadonlyArray(material)) {
+            if (!EffectArray.isReadonlyArrayNonEmpty(material)) {
               throw new Error(
                 "A fused graph target unexpectedly has no evidence",
               )
@@ -2181,7 +2182,7 @@ export const defineDocumentGraph = <
         ),
       )
 
-    return {
+    const handle = {
       target: definition.target,
       search: (
         query: string,
@@ -2259,12 +2260,17 @@ export const defineDocumentGraph = <
             "document_graph.search.strategy":
               definition.strategy === undefined
                 ? "hybrid"
-                : typeof definition.strategy === "object"
-                  ? definition.strategy.mode
-                  : definition.strategy,
+                : definition.strategy === "semantic" ||
+                    definition.strategy === "text" ||
+                    definition.strategy === "hybrid"
+                  ? definition.strategy
+                  : definition.strategy.mode,
           }),
         ),
-    } as unknown as GraphRetrievalHandle<
+    }
+    // SAFETY: The compiled routes and target were validated against the graph
+    // schema before this typed retrieval handle was constructed.
+    return handle as GraphRetrievalHandle<
       GraphId,
       Documents,
       TargetKind,
@@ -2312,21 +2318,17 @@ export const defineDocumentGraph = <
       exposeSearchOperation(
         Effect.gen(function*() {
           const strategy = yield* schemaSearchStrategy(options)
+          const scopeInput: GraphSearchScopeInput<
+            DocumentKind<Documents>,
+            GraphProjectionId<Documents>
+          > = {
+            include: options?.include,
+            exclude: options?.exclude,
+            includeProjections: options?.includeProjections,
+            excludeProjections: options?.excludeProjections,
+          }
           const searchScope = yield* parseRuntimeSearchOptions(() => ({
-            ...scope({
-              ...(options?.include === undefined
-                ? {}
-                : { include: options.include }),
-              ...(options?.exclude === undefined
-                ? {}
-                : { exclude: options.exclude }),
-              ...(options?.includeProjections === undefined
-                ? {}
-                : { includeProjections: options.includeProjections }),
-              ...(options?.excludeProjections === undefined
-                ? {}
-                : { excludeProjections: options.excludeProjections }),
-            }),
+            ...scope(scopeInput),
             registered,
           }))
           yield* Effect.annotateCurrentSpan({
