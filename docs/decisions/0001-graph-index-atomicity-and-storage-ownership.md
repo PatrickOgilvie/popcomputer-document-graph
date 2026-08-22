@@ -177,6 +177,10 @@ a separate graph store. Making it optional now would add another orchestration
 path, conflict model, adapter contract, and test matrix without a demonstrated
 consumer need.
 
+> Amended 2026-08: the demonstrated consumer need arrived. A prepared-mutation
+> boundary shipped as `prepareGraphMutation` / `replayPreparedGraphMutation`
+> - not as `DocumentGraphMutationStore`. See [Amendment (2026-08)](#amendment-2026-08-prepared-mutations-delivered).
+
 ### 6. Keep embedding providers independent from storage
 
 Storage adapters do not call embedding providers. Embedding identity, batching,
@@ -212,7 +216,7 @@ invalid projection output, and invalid chunking output are not transient.
 | Embedding requests and response validation | `EmbeddingProvider` plus package orchestration |
 | One complete revision transaction and optimistic-token enforcement | `ProjectionIndexStore` adapter |
 | One complete source-edge transaction and source-level serialization | `GraphRelationStore` adapter |
-| SQL transactions, savepoints, advisory locks, and row parsing | PostgreSQL External Adapter Module |
+| SQL transactions, savepoints, exact-key row locks, and row parsing | PostgreSQL External Adapter Module |
 | Pool or active transaction lifecycle | Application composition root |
 | HTTP failure mapping and response projection | Honertia application |
 | Retry scheduling and durable job policy | Calling application or workflow |
@@ -309,3 +313,32 @@ replacement, and adapter conformance through production Effect seams.
 The PostgreSQL integration suite verifies transaction/savepoint rollback when
 enabled. In-memory tests are not evidence of PostgreSQL transaction behaviour,
 and the live PostgreSQL suite remains conditional on a supplied test database.
+
+## Amendment (2026-08): prepared mutations delivered
+
+The reconsideration triggers above were met by a production consumer, and the
+deferred capability shipped without becoming `DocumentGraphMutationStore`:
+
+- `prepareGraphMutation(program)` locally intercepts the two replacement
+  operations while delegating reads, so an application's ordinary indexing
+  Effect resolves embeddings and plans mutations with no storage writes.
+- The combinator returns the program result alongside a deterministically
+  ordered, duplicate-checked mutation set (`DuplicatePreparedMutation` on
+  conflicting identities), projections before relation sets.
+- `replayPreparedGraphMutation(prepared, target)` applies the set sequentially
+  to the narrow `GraphMutationTarget` - pooled for convergent publication or
+  transaction-scoped for all-or-nothing publication alongside application
+  rows. Replaying performs no network calls; optimistic tokens are
+  revalidated inside the target storage as before.
+
+Points 1-5 and 6 are satisfied by construction; point 7 is satisfied by
+behaviour tests proving capture writes nothing, replay equals direct indexing,
+replay performs no embedding calls, and replayed state equals directly indexed
+state through public retrieval seams. The fixed savepoint name in
+caller-owned PostgreSQL transactions keeps replay sequential; concurrent
+replay remains future work tied to per-operation savepoints.
+
+PostgreSQL mutation serialization also changed: advisory hash locks were
+replaced by exact-key row locks on the package-migrated `mutation_locks`
+table, which removes cross-key false sharing and works through proxies such
+as Cloudflare Hyperdrive that do not support advisory locks.

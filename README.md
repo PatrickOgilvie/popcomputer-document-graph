@@ -27,6 +27,8 @@ response shapes.
 - Typed document, projection, relation, and retrieval handles
 - Semantic, full-text, and reciprocal-rank-fused hybrid search
 - Complete-revision delta indexing with embedding reuse
+- Prepared-mutation capture and replay for all-or-nothing publication
+- Post-search evidence currency verification
 - Schema-defined metadata filters and graph search scopes
 - Target-oriented retrieval across direct and related evidence
 - Typed incoming and outgoing neighbour traversal
@@ -48,6 +50,8 @@ together. `pg` is needed when composing the included PostgreSQL adapter.
 
 For PostgreSQL, apply
 [`migrations/postgres/0001_initial.sql`](./migrations/postgres/0001_initial.sql)
+and
+[`migrations/postgres/0002_mutation_locks.sql`](./migrations/postgres/0002_mutation_locks.sql)
 with the application's migration tool. The runtime never modifies the database
 schema.
 
@@ -697,6 +701,30 @@ Traversal returns typed document references; loading and authorizing source
 documents remains an application responsibility. Limits default to 100 and are
 bounded to 1,000.
 
+### Evidence currency
+
+Search hits carry the `revisionHash` of the indexed revision they were
+produced from. When hydration happens later, ingestion may have replaced or
+deleted that revision. Verify references instead of joining storage internals:
+
+```ts
+import {
+  evidenceReferenceFromHit,
+  verifyEvidenceCurrency,
+} from "@popcomputer/document-graph"
+
+const references = hits.map(evidenceReferenceFromHit)
+const currencies = yield* verifyEvidenceCurrency(references)
+// currencies[i] is "Current", "Stale", or "Missing", aligned with hits[i]
+```
+
+Currency is decided by hash equality against the currently stored revision:
+the hash covers content, metadata, chunking policy, text-search policy, and
+projection version. Re-embedding an otherwise identical revision leaves its
+textual evidence `Current`; changing the projection version makes it `Stale`.
+Absence reports `"Missing"` rather than failing; only storage failures fail
+the effect. Drop non-`Current` evidence before presenting or hydrating it.
+
 ## Sections, metadata, and chunking
 
 A section is the smallest attribution boundary. Every derived chunk belongs to
@@ -857,6 +885,59 @@ pooled operation remains the normal choice. See
 [`ADR 0001`](./docs/decisions/0001-graph-index-atomicity-and-storage-ownership.md)
 for the complete contract.
 
+pg `Client` and `PoolClient` values are accepted directly. A proxy-specific
+pinned transaction surface can opt in explicitly:
+
+```ts
+import {
+  postgresDocumentGraph,
+  postgresTransactionClient,
+} from "@popcomputer/document-graph/postgres"
+
+const transaction = postgresTransactionClient(proxyTransaction)
+const StorageLive = postgresDocumentGraph({ transaction })
+```
+
+Do not wrap or pass a pool as `transaction`; pool queries are not guaranteed to
+run on one connection. Use `postgresDocumentGraph({ pool })` instead.
+
+### Atomic publication with prepared mutations
+
+When publication must be all-or-nothing across application tables and graph
+tables, resolve embeddings outside the write transaction by capturing a
+complete prepared mutation first. Wrap your normal indexing Effect with
+`prepareGraphMutation`: chunking, embedding calls, and planning execute
+normally, but no storage is written. Preparation produces an immutable, deterministically
+ordered operation set that replays into any storage - pooled for convergent
+publication, or transaction-scoped when the replay must commit together with
+application rows:
+
+```ts
+import {
+  prepareGraphMutation,
+  replayPreparedGraphMutation,
+} from "@popcomputer/document-graph"
+
+const { result, mutation } = yield* prepareGraphMutation(indexingProgram)
+
+// Inside one short transaction: lock application rows, then
+yield* replayPreparedGraphMutation(mutation, transactionScopedStorage)
+// then mark application state indexed, then COMMIT.
+```
+
+Preparation returns the indexing result alongside the mutation and rejects two
+mutations claiming the same identity with
+`DuplicatePreparedMutation`, orders projections before relation sets, and
+performs no storage writes during capture. Replay performs no network calls:
+every vector was resolved before capture. Its target needs only
+`replaceRevision` and `replaceOutgoing`, rather than the complete storage API. See
+[`examples/atomic-publication.ts`](./examples/atomic-publication.ts) for a
+compile-checked walkthrough.
+
+Prepared mutation capture supports projection and outgoing-relation
+replacements. Delete and reconciliation operations fail without touching live
+storage; run those operations through their ordinary storage layer.
+
 ## Storage and Effect composition
 
 The graph definition is independent of infrastructure. A storage Layer provides
@@ -978,10 +1059,16 @@ The included PostgreSQL implementation:
   embedding-profile filters;
 - uses PostgreSQL full-text search for lexical candidates;
 - applies scope before candidate limits;
-- protects complete revision replacement with transactions, advisory locks,
-  and optimistic tokens;
+- protects complete revision replacement with transactions, exact-key row
+  locks on a dedicated `mutation_locks` table, and optimistic tokens;
 - stores directed relations in the same schema;
 - requires no PostgreSQL extension.
+
+Mutation serialization takes transaction-scoped row locks keyed by mutation
+kind and exact document identity instead of advisory locks, so concurrent
+writers block only when they mutate the same scope and the adapter works
+through Cloudflare Hyperdrive and other proxies that do not support advisory
+lock functions.
 
 Exact vector scans provide a predictable zero-configuration baseline for
 moderate corpora. Measure representative query latency before selecting an

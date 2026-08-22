@@ -1,6 +1,6 @@
 {
   "name": "@popcomputer/document-graph",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Schema-defined document graphs with hybrid search, graph retrieval, and composable storage",
   "type": "module",
   "main": "./dist/index.js",

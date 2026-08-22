@@ -131,9 +131,10 @@ const makeRecordingStore = () => {
   let tokenSequence = 0
   const commits: Array<ReplaceProjectedRevision> = []
 
-  const loadRevision: ProjectionIndexStoreService["loadRevision"] = () =>
-    Effect.succeed(
-      revision === undefined
+  const loadRevisions: ProjectionIndexStoreService["loadRevisions"] = (keys) =>
+    Effect.succeed(keys.map((key) => ({
+      key,
+      revision: revision === undefined
         ? Option.none()
         : Option.some({
             token: revision.token,
@@ -142,7 +143,7 @@ const makeRecordingStore = () => {
               revision.replacement.embeddingProfile,
             chunks: revision.snapshotChunks,
           }),
-    )
+    })))
 
   const replaceRevision: ProjectionIndexStoreService["replaceRevision"] =
     (replacement) => {
@@ -242,7 +243,7 @@ const makeRecordingStore = () => {
     }
 
   const service: ProjectionIndexStoreService = {
-    loadRevision,
+    loadRevisions,
     replaceRevision,
     deleteRevision: () =>
       Effect.succeed({ deletedRevisions: 0, deletedChunks: 0 }),

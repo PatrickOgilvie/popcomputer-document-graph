@@ -34,6 +34,7 @@ import {
   ProjectionIndexStoreFailed,
   type IndexedRevisionSnapshot,
   type IndexRevisionToken,
+  type ProjectionRevisionLookup,
   type ProjectionIndexCommit,
   type ReplaceProjectedRevision,
 } from "../../indexing/projection-index.js"
@@ -92,6 +93,26 @@ class InvalidStoredState extends Error {
 }
 
 const RevisionWithChunkRowSchema = Schema.Struct({
+  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/)),
+  revision_hash: ProjectionRevisionHashSchema,
+  embedding_profile_id: EmbeddingProfileIdSchema,
+  embedding_profile_version: EmbeddingProfileVersionSchema,
+  embedding_dimensions: EmbeddingDimensionsSchema,
+  chunk_id: Schema.NullOr(ChunkIdSchema),
+  content_hash: Schema.NullOr(ContentHashSchema),
+  ordinal: Schema.NullOr(
+    Schema.Number.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(0),
+    ),
+  ),
+})
+
+const RequestedRevisionWithChunkRowSchema = Schema.Struct({
+  request_ordinal: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isGreaterThanOrEqualTo(1),
+  ),
   revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/)),
   revision_hash: ProjectionRevisionHashSchema,
   embedding_profile_id: EmbeddingProfileIdSchema,
@@ -166,8 +187,8 @@ const DeletedGraphEdgeCountRowSchema = Schema.Struct({
   deleted_count: Schema.String.check(Schema.isPattern(/^[0-9]+$/)),
 })
 
-type RevisionWithChunkRow = Schema.Codec.Encoded<
-  typeof RevisionWithChunkRowSchema
+type RequestedRevisionWithChunkRow = Schema.Codec.Encoded<
+  typeof RequestedRevisionWithChunkRowSchema
 >
 type ReusableChunkRow = Schema.Codec.Encoded<typeof ReusableChunkRowSchema>
 type RevisionTokenRow = Schema.Codec.Encoded<typeof RevisionTokenRowSchema>
@@ -188,6 +209,13 @@ interface DeletionCounts {
 }
 
 const quoteIdentifier = (identifier: string): string => `"${identifier}"`
+
+interface PostgresTables {
+  readonly revisions: string
+  readonly chunks: string
+  readonly relations: string
+  readonly locks: string
+}
 
 const parseRow = <S extends Schema.ConstraintDecoder<unknown>>(
   schema: S,
@@ -229,7 +257,7 @@ const revisionToken = (value: string): IndexRevisionToken =>
 
 const indexFailure = (
   operation:
-    | "load_revision"
+    | "load_revisions"
     | "replace_revision"
     | "delete_revision"
     | "prune_graph",
@@ -242,6 +270,55 @@ const indexFailure = (
       : "unavailable",
     cause,
   })
+
+const indexedRevisionSnapshot = (
+  rows: ReadonlyArray<typeof RevisionWithChunkRowSchema.Type>,
+): IndexedRevisionSnapshot => {
+  const first = rows[0]
+  if (
+    first === undefined ||
+    first.chunk_id === null ||
+    first.content_hash === null ||
+    rows.some(
+      (row) =>
+        row.revision_token !== first.revision_token ||
+        row.revision_hash !== first.revision_hash ||
+        row.embedding_profile_id !== first.embedding_profile_id ||
+        row.embedding_profile_version !== first.embedding_profile_version ||
+        row.embedding_dimensions !== first.embedding_dimensions ||
+        row.chunk_id === null ||
+        row.content_hash === null,
+    )
+  ) {
+    throw new InvalidStoredState("A projected revision is incomplete")
+  }
+
+  const toChunkSummary = (
+    row: typeof RevisionWithChunkRowSchema.Type,
+  ): IndexedRevisionSnapshot["chunks"][number] => {
+    if (row.chunk_id === null || row.content_hash === null) {
+      throw new InvalidStoredState("A projected revision has an incomplete chunk")
+    }
+    return {
+      chunkId: row.chunk_id,
+      contentHash: row.content_hash,
+    }
+  }
+
+  return {
+    token: revisionToken(first.revision_token),
+    revisionHash: first.revision_hash,
+    embeddingProfile: {
+      id: first.embedding_profile_id,
+      version: first.embedding_profile_version,
+      dimensions: first.embedding_dimensions,
+    },
+    chunks: [
+      toChunkSummary(first),
+      ...rows.slice(1).map(toChunkSummary),
+    ],
+  }
+}
 
 const searchFailure = (cause: unknown): ProjectionSearchStoreFailed =>
   new ProjectionSearchStoreFailed({
@@ -406,14 +483,42 @@ const insertChunks = async (
   }
 }
 
+const lockMutationInTransaction = async (
+  client: TransactionClient,
+  locksTable: string,
+  kind: "projection" | "relations",
+  scopeKey: string,
+  memberKey: string,
+): Promise<void> => {
+  await client.query(
+    `INSERT INTO ${locksTable} (mutation_kind, scope_key, member_key)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (mutation_kind, scope_key, member_key) DO NOTHING`,
+    [kind, scopeKey, memberKey],
+  )
+  await client.query(
+    `SELECT member_key FROM ${locksTable}
+     WHERE mutation_kind = $1 AND scope_key = $2 AND member_key = $3
+     FOR UPDATE`,
+    [kind, scopeKey, memberKey],
+  )
+}
+
 const replaceInTransaction = async (
   client: TransactionClient,
-  tables: { readonly revisions: string; readonly chunks: string },
+  tables: {
+    readonly revisions: string
+    readonly chunks: string
+    readonly locks: string
+  },
   replacement: ReplaceProjectedRevision,
 ): Promise<ProjectionIndexCommit> => {
-  await client.query(
-    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-    [`${replacement.key.documentKey}:${replacement.key.projection}`],
+  await lockMutationInTransaction(
+    client,
+    tables.locks,
+    "projection",
+    replacement.key.documentKey,
+    replacement.key.projection,
   )
 
   const currentRows = await queryRows<CurrentRevisionRow>(
@@ -549,12 +654,19 @@ const parseDeletionCounts = (
 
 const deleteRevisionInTransaction = async (
   client: TransactionClient,
-  tables: { readonly revisions: string; readonly chunks: string },
+  tables: {
+    readonly revisions: string
+    readonly chunks: string
+    readonly locks: string
+  },
   key: { readonly documentKey: string; readonly projection: string },
 ): Promise<{ readonly deletedRevisions: number; readonly deletedChunks: number }> => {
-  await client.query(
-    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-    [`${key.documentKey}:${key.projection}`],
+  await lockMutationInTransaction(
+    client,
+    tables.locks,
+    "projection",
+    key.documentKey,
+    key.projection,
   )
   const countRows = await queryRows<DeletionCountRow>(
     client,
@@ -884,7 +996,7 @@ const searchTextCandidates = async (
 
 const replaceOutgoingRelationsInTransaction = async (
   client: TransactionClient,
-  table: string,
+  tables: PostgresTables,
   replacement: ReplaceOutgoingGraphRelations,
 ): Promise<GraphRelationCommit> => {
   const plan = planOutgoingGraphRelationReplacement(replacement)
@@ -892,14 +1004,17 @@ const replaceOutgoingRelationsInTransaction = async (
     throw new InvalidStoredState(plan.failure)
   }
 
-  await client.query(
-    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-    [`relations:${replacement.graph}:${replacement.sourceDocumentKey}`],
+  await lockMutationInTransaction(
+    client,
+    tables.locks,
+    "relations",
+    replacement.graph,
+    replacement.sourceDocumentKey,
   )
   const previousRows = await queryRows<GraphEdgeIdentityRow>(
     client,
     `SELECT relation_id, target_document_key
-     FROM ${table}
+     FROM ${tables.relations}
      WHERE graph_id = $1 AND source_document_key = $2`,
     [replacement.graph, replacement.sourceDocumentKey],
   )
@@ -921,7 +1036,7 @@ const replaceOutgoingRelationsInTransaction = async (
   const rows = plan.success.edges
 
   await client.query(
-    `DELETE FROM ${table}
+    `DELETE FROM ${tables.relations}
      WHERE graph_id = $1 AND source_document_key = $2`,
     [replacement.graph, replacement.sourceDocumentKey],
   )
@@ -948,7 +1063,7 @@ const replaceOutgoingRelationsInTransaction = async (
         ${parameter(7)}, ${parameter(8)}, ${parameter(9)}::jsonb)`
     })
     await client.query(
-      `INSERT INTO ${table}
+      `INSERT INTO ${tables.relations}
         (graph_id, relation_id, relation_version, source_document_key,
          source_document_kind, encoded_source_document_id,
          target_document_key, target_document_kind,
@@ -1100,6 +1215,19 @@ const findGraphNeighbours = async (
   })
 }
 
+const namedPostgresOperation = <
+  Args extends ReadonlyArray<unknown>,
+  A,
+  E,
+  R,
+>(
+  name: string,
+  operation: (...args: Args) => Effect.Effect<A, E, R>,
+): ((...args: Args) => Effect.Effect<A, E, R>) =>
+  Effect.fn(name)(function*(...args: Args) {
+    return yield* operation(...args)
+  })
+
 const makePostgresStorage = (
   config: PostgresDocumentGraphConfig,
 ): DocumentGraphStorageService => {
@@ -1107,86 +1235,68 @@ const makePostgresStorage = (
     config.schema ?? DefaultSchema,
   )
   const namespace = quoteIdentifier(schema)
-  const tables = {
+  const tables: PostgresTables = {
     revisions: `${namespace}."projected_revisions"`,
     chunks: `${namespace}."projected_chunks"`,
     relations: `${namespace}."graph_relations"`,
+    locks: `${namespace}."mutation_locks"`,
   }
 
-  return {
-    loadRevision: (key) =>
+  const storage: DocumentGraphStorageService = {
+    loadRevisions: (keys) =>
       Effect.tryPromise({
         try: async () => {
-          const rows = await queryRows<RevisionWithChunkRow>(
+          const rows = await queryRows<RequestedRevisionWithChunkRow>(
             connectionFor(config),
-            `SELECT r.revision_token::text AS revision_token,
+            `WITH requested(document_key, projection_id, request_ordinal) AS (
+               SELECT document_key, projection_id, request_ordinal
+               FROM unnest($1::text[], $2::text[]) WITH ORDINALITY
+                 AS request(document_key, projection_id, request_ordinal)
+             )
+             SELECT requested.request_ordinal::integer AS request_ordinal,
+                    r.revision_token::text AS revision_token,
                     r.revision_hash, r.embedding_profile_id,
                     r.embedding_profile_version, r.embedding_dimensions,
                     c.chunk_id, c.content_hash, c.ordinal
-             FROM ${tables.revisions} AS r
+             FROM requested
+             INNER JOIN ${tables.revisions} AS r
+               ON r.document_key = requested.document_key
+              AND r.projection_id = requested.projection_id
              LEFT JOIN ${tables.chunks} AS c
                ON c.document_key = r.document_key
               AND c.projection_id = r.projection_id
-             WHERE r.document_key = $1 AND r.projection_id = $2
-             ORDER BY c.ordinal`,
-            [key.documentKey, key.projection],
+             ORDER BY requested.request_ordinal, c.ordinal`,
+            [
+              keys.map((key) => key.documentKey),
+              keys.map((key) => key.projection),
+            ],
           )
-          if (rows.length === 0) return Option.none()
-
           const parsed = rows.map((row) =>
             parseRow(
-              RevisionWithChunkRowSchema,
+              RequestedRevisionWithChunkRowSchema,
               row,
               "projected revision",
             ),
           )
-          const first = parsed[0]
-          if (
-            first === undefined ||
-            first.chunk_id === null ||
-            first.content_hash === null ||
-            parsed.some(
-              (row) =>
-                row.revision_token !== first.revision_token ||
-                row.revision_hash !== first.revision_hash ||
-                row.embedding_profile_id !== first.embedding_profile_id ||
-                row.embedding_profile_version !== first.embedding_profile_version ||
-                row.embedding_dimensions !== first.embedding_dimensions ||
-                row.chunk_id === null ||
-                row.content_hash === null,
-            )
-          ) {
-            throw new InvalidStoredState("A projected revision is incomplete")
+
+          const rowsByOrdinal = new Map<number, Array<typeof parsed[number]>>()
+          for (const row of parsed) {
+            const grouped = rowsByOrdinal.get(row.request_ordinal) ?? []
+            grouped.push(row)
+            rowsByOrdinal.set(row.request_ordinal, grouped)
           }
 
-          const toChunkSummary = (
-            row: typeof first,
-          ): IndexedRevisionSnapshot["chunks"][number] => {
-            if (row.chunk_id === null || row.content_hash === null) {
-              throw new InvalidStoredState("A projected revision has an incomplete chunk")
-            }
+          return keys.map((key, index): ProjectionRevisionLookup => {
+            const revisionRows = rowsByOrdinal.get(index + 1)
             return {
-              chunkId: row.chunk_id,
-              contentHash: row.content_hash,
+              key,
+              revision: revisionRows === undefined
+                ? Option.none()
+                : Option.some(indexedRevisionSnapshot(revisionRows)),
             }
-          }
-          const chunks: IndexedRevisionSnapshot["chunks"] = [
-            toChunkSummary(first),
-            ...parsed.slice(1).map(toChunkSummary),
-          ]
-
-          return Option.some({
-            token: revisionToken(first.revision_token),
-            revisionHash: first.revision_hash,
-            embeddingProfile: {
-              id: first.embedding_profile_id,
-              version: first.embedding_profile_version,
-              dimensions: first.embedding_dimensions,
-            },
-            chunks,
           })
         },
-        catch: (cause) => indexFailure("load_revision", cause),
+        catch: (cause) => indexFailure("load_revisions", cause),
       }),
 
     replaceRevision: (replacement) =>
@@ -1233,7 +1343,7 @@ const makePostgresStorage = (
         (client) =>
           replaceOutgoingRelationsInTransaction(
             client,
-            tables.relations,
+            tables,
             replacement,
           ),
         (cause) => relationFailure("replace_outgoing", cause),
@@ -1298,6 +1408,53 @@ const makePostgresStorage = (
           ),
         catch: (cause) => relationFailure("find_incoming", cause),
       }),
+  }
+
+  return {
+    loadRevisions: namedPostgresOperation(
+      "PostgresProjectionIndex.loadRevisions",
+      storage.loadRevisions,
+    ),
+    replaceRevision: namedPostgresOperation(
+      "PostgresProjectionIndex.replaceRevision",
+      storage.replaceRevision,
+    ),
+    deleteRevision: namedPostgresOperation(
+      "PostgresProjectionIndex.deleteRevision",
+      storage.deleteRevision,
+    ),
+    pruneGraph: namedPostgresOperation(
+      "PostgresProjectionIndex.pruneGraph",
+      storage.pruneGraph,
+    ),
+    searchCandidates: namedPostgresOperation(
+      "PostgresProjectionSearch.searchCandidates",
+      storage.searchCandidates,
+    ),
+    searchTextCandidates: namedPostgresOperation(
+      "PostgresProjectionSearch.searchTextCandidates",
+      storage.searchTextCandidates,
+    ),
+    replaceOutgoing: namedPostgresOperation(
+      "PostgresGraphRelations.replaceOutgoing",
+      storage.replaceOutgoing,
+    ),
+    deleteNode: namedPostgresOperation(
+      "PostgresGraphRelations.deleteNode",
+      storage.deleteNode,
+    ),
+    pruneRelations: namedPostgresOperation(
+      "PostgresGraphRelations.pruneRelations",
+      storage.pruneRelations,
+    ),
+    findOutgoing: namedPostgresOperation(
+      "PostgresGraphRelations.findOutgoing",
+      storage.findOutgoing,
+    ),
+    findIncoming: namedPostgresOperation(
+      "PostgresGraphRelations.findIncoming",
+      storage.findIncoming,
+    ),
   }
 }
 

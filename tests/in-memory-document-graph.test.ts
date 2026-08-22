@@ -358,10 +358,10 @@ describe("inMemoryDocumentGraph", () => {
 
         const hiddenBeforePrune = yield* graph.search("national")
         const pruned = yield* graph.reconcileIndex()
-        const storedAfterPrune = yield* store.loadRevision({
+        const [storedAfterPrune] = yield* store.loadRevisions([{
           documentKey: revision.documentKey,
           projection: "retired-projection",
-        })
+        }])
         return { hiddenBeforePrune, pruned, storedAfterPrune }
       }).pipe(Effect.provide(live)),
     )
@@ -372,7 +372,10 @@ describe("inMemoryDocumentGraph", () => {
       deletedChunks: revision.chunks.length,
       deletedRelations: 0,
     })
-    expect(Option.isNone(result.storedAfterPrune)).toBe(true)
+    expect(
+      result.storedAfterPrune !== undefined &&
+        Option.isNone(result.storedAfterPrune.revision),
+    ).toBe(true)
   })
 
   test("rejects replacement with a stale optimistic token", async () => {

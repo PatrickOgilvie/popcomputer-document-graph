@@ -96,13 +96,15 @@ const migrateInSchema = async (
   pool: Pool,
   schema: string,
 ): Promise<void> => {
-  const migration = await readFile(
-    new URL("../migrations/postgres/0001_initial.sql", import.meta.url),
-    "utf8",
-  )
-  await pool.query(
-    migration.replaceAll('"honertia_document_graph"', `"${schema}"`),
-  )
+  for (const file of ["0001_initial.sql", "0002_mutation_locks.sql"]) {
+    const migration = await readFile(
+      new URL(`../migrations/postgres/${file}`, import.meta.url),
+      "utf8",
+    )
+    await pool.query(
+      migration.replaceAll('"honertia_document_graph"', `"${schema}"`),
+    )
+  }
 }
 
 describe("postgresDocumentGraph", () => {
@@ -242,10 +244,11 @@ describe("postgresDocumentGraph", () => {
             })
             const staleRevision = yield* ArticleContent.project(metadataOnly)
             const store = yield* ProjectionIndexStore
-            const staleSnapshot = yield* store.loadRevision({
+            const [staleLookup] = yield* store.loadRevisions([{
               documentKey: staleRevision.documentKey,
               projection: staleRevision.projection.id,
-            })
+            }])
+            const staleSnapshot = staleLookup?.revision ?? Option.none()
             const third = yield* ArticleContent.index(withoutStaleSection)
             const finalHits = yield* graph.search("national")
             const [staleFirst, ...staleRest] = staleRevision.chunks

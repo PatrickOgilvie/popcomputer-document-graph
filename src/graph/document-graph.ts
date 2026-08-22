@@ -7,7 +7,6 @@ import {
 } from "effect"
 import type { DocumentReference } from "../document/document-reference.js"
 import type {
-  RegisteredDocumentDefinition,
   DocumentDefinitions,
   DocumentId,
   DocumentKind,
@@ -15,18 +14,14 @@ import type {
 } from "../document/document-definition.js"
 import {
   projectDocument,
-  projectParsedDocument,
   type DocumentProjectionId,
   type ProjectDocumentError,
   type ProjectedRevision,
 } from "../document/document-projection.js"
 import {
-  encodeDocumentId,
-  makeDocumentKey,
   type DocumentKey,
   type InvalidDocumentIdentity,
 } from "../document/document-identity.js"
-import { parseDocumentInstance } from "../document/document-instance.js"
 import {
   makeGraphSearchScope,
   InvalidSearchOutput,
@@ -35,13 +30,8 @@ import {
   ProjectionSearchStore,
   ProjectionTextSearchStore,
   searchGraph,
-  searchGraphHybrid,
-  searchGraphHybridWithSemanticQuery,
-  searchGraphText,
-  searchGraphWithPreparedSemanticQuery,
   SearchResultCountSchema,
   semantic,
-  text,
   type GraphSearchScope,
   type GraphSearchScopeInput,
   type SemanticQueryPreparation,
@@ -52,6 +42,10 @@ import {
   type SearchResultCount,
   type SearchSignal,
 } from "../retrieval/graph-retrieval.js"
+import {
+  compileProjectionSearchPlan,
+  executeProjectionSearch,
+} from "../retrieval/projection-search.js"
 import {
   makeMetadataFilterBuilder,
   metadataEquals,
@@ -95,7 +89,6 @@ import {
   GraphNeighbourLimitSchema,
   InvalidGraphNeighbourOutput,
   InvalidGraphRelationOutput,
-  projectOutgoingGraphRelationsForInstance,
   GraphRelationStore,
   type GraphRelationCommit,
   type GraphNeighbourLimit,
@@ -112,13 +105,19 @@ import {
   InvalidGraphTraversal,
 } from "./document-graph-errors.js"
 import {
-  assertUniqueProjectionIds,
-  assertValidGraphRelations,
-  makeDocumentGraphManifest,
-  registeredGraphProjections,
-  registeredGraphRelations,
   type DocumentGraphManifest,
 } from "./document-graph-schema.js"
+import {
+  compileDocumentGraph,
+  type CompiledDocumentGraph,
+} from "./compiled-document-graph.js"
+import { makeGraphReferenceCodec } from "./graph-reference.js"
+import {
+  indexGraphDocumentWorkflow,
+  removeGraphDocumentWorkflow,
+} from "./graph-indexing.js"
+import { reconcileDocumentGraphWorkflow } from "./graph-maintenance.js"
+import { findGraphNeighboursWorkflow } from "./graph-traversal.js"
 
 type OutgoingRelationId<
   Relations extends GraphRelationDefinitions,
@@ -813,16 +812,6 @@ export interface DefineDocumentGraphInput<
   ) => Relations
 }
 
-const UnknownReferenceSchema = Schema.Struct({
-  graph: Schema.String,
-  kind: Schema.String,
-  id: Schema.Unknown,
-})
-
-const invalidReference = (
-  reason: InvalidDocumentReference["reason"],
-): InvalidDocumentReference => new InvalidDocumentReference({ reason })
-
 const failDocumentGraphOperation = (
   operation: DocumentGraphOperation,
   reason: DocumentGraphUnavailable["reason"],
@@ -1017,110 +1006,21 @@ const metadataFilters = <Metadata>(
   })
 }
 
-/** Compile document schemas and vector metadata into one application graph. */
-export const defineDocumentGraph = <
+const bindDocumentGraph = <
   const GraphId extends string,
   const Documents extends DocumentDefinitions,
   const Relations extends GraphRelationDefinitions = {},
 >(
-  input: DefineDocumentGraphInput<GraphId, Documents, Relations>,
+  compiled: CompiledDocumentGraph<GraphId, Documents, Relations>,
 ): DocumentGraph<GraphId, Documents, Relations> => {
-  const defineRelation: DefineGraphRelation<Documents> = (relation) =>
-    relation
-  // SAFETY: When no relation callback is provided, Relations uses its empty
-  // default. A provided callback constructs every entry through defineRelation.
-  const relations = (input.relations === undefined
-    ? {}
-    : input.relations(defineRelation)) as Relations
-  assertUniqueProjectionIds(input.documents)
-  assertValidGraphRelations(input.documents, relations)
-  const registered = registeredGraphProjections(input.documents)
-  const registeredRelations = registeredGraphRelations(relations)
-
-  const ref = <Kind extends DocumentKind<Documents>>(
-    kind: Kind,
-    id: DocumentId<Documents, Kind>,
-  ): DocumentReference<GraphId, Documents, Kind> => {
-    const definition: Documents[Kind] | undefined = input.documents[kind]
-    if (definition === undefined) {
-      throw new Error(`Unknown document kind: ${kind}`)
-    }
-
-    const parsedId = Schema.decodeUnknownSync(definition.id)(id)
-
-    // SAFETY: Kind selects this exact document definition and its ID schema
-    // parsed the value before the graph-specific reference was constructed.
-    return {
-      graph: input.id,
-      kind,
-      id: parsedId,
-    } as DocumentReference<GraphId, Documents, Kind>
-  }
-
-  const parseReference = (
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- This function immediately decodes the boundary value with UnknownReferenceSchema.
-    candidate: unknown,
-  ): Effect.Effect<
-    DocumentReference<GraphId, Documents>,
-    InvalidDocumentReference
-  > =>
-    Schema.decodeUnknownEffect(UnknownReferenceSchema)(candidate, {
-      onExcessProperty: "error",
-    }).pipe(
-      Effect.mapError(() => invalidReference("invalid_shape")),
-      Effect.flatMap((parsed) => {
-        if (parsed.graph !== input.id) {
-          return Effect.fail(invalidReference("wrong_graph"))
-        }
-
-        const definition: RegisteredDocumentDefinition | undefined =
-          input.documents[parsed.kind]
-        if (definition === undefined) {
-          return Effect.fail(invalidReference("unknown_document_kind"))
-        }
-
-        return Schema.decodeUnknownEffect(definition.id)(parsed.id).pipe(
-          Effect.mapError(() => invalidReference("invalid_document_id")),
-          Effect.map((id) => {
-            // SAFETY: The graph and kind were matched against this definition,
-            // and its ID schema parsed the value before constructing the union.
-            return {
-              graph: input.id,
-              kind: parsed.kind,
-              id,
-            } as DocumentReference<GraphId, Documents>
-          }),
-        )
-      }),
-    )
-
-  const key = <Kind extends DocumentKind<Documents>>(
-    target: DocumentReference<GraphId, Documents, Kind>,
-  ): Effect.Effect<DocumentKey, InvalidDocumentIdentity> => {
-    const definition = input.documents[target.kind]
-    if (definition === undefined) {
-      return Effect.die(
-        new Error(
-          `Unknown document kind ${target.kind} for graph ${input.id}`,
-        ),
-      )
-    }
-
-    return encodeDocumentId(
-      input.id,
-      target.kind,
-      definition.id,
-      target.id,
-    ).pipe(
-      Effect.map((encodedId) =>
-        makeDocumentKey({
-          graph: input.id,
-          documentKind: target.kind,
-          encodedId,
-        }),
-      ),
-    )
-  }
+  const input = compiled
+  const relations = compiled.relations
+  const registered = compiled.registeredProjections
+  const registeredRelations = compiled.registeredRelations
+  const references = makeGraphReferenceCodec(input.id, input.documents)
+  const ref = references.ref
+  const parseReference = references.parse
+  const key = references.key
 
   const scope = (
     scopeInput?: GraphSearchScopeInput<
@@ -1139,12 +1039,12 @@ export const defineDocumentGraph = <
   > =>
     Effect.gen(function*() {
       const reference = yield* parseReference(hit.reference)
-      const definition = input.documents[reference.kind]
-      const projection = definition?.projections.find(
-        (candidate) =>
-          candidate.id === hit.projection.id &&
-          candidate.version === hit.projection.version,
-      )
+      const candidateProjection = compiled.projectionsByDocumentKind
+        .get(reference.kind)
+        ?.get(hit.projection.id)
+      const projection = candidateProjection?.version === hit.projection.version
+        ? candidateProjection
+        : undefined
       if (projection === undefined) {
         return yield* Effect.fail(
           new InvalidSearchOutput({ channel, reason: "out_of_scope" }),
@@ -1230,89 +1130,23 @@ export const defineDocumentGraph = <
         "document_graph.search.limit": inputSearch.plan.results,
       })
 
-      const searchHits = yield* Effect.gen(function*() {
-        switch (inputSearch.plan.strategy._tag) {
-          case "Semantic": {
-            const strategy = semantic({
-              candidates: inputSearch.plan.semanticCandidates,
-              results: inputSearch.plan.results,
-              weight: inputSearch.plan.strategy.weight,
-              rankConstant: inputSearch.plan.strategy.rankConstant,
-            })
-            return inputSearch.semanticQuery === undefined
-              ? yield* searchGraph({
-                  query: inputSearch.query,
-                  scope: searchScope,
-                  strategy,
-                })
-              : yield* inputSearch.semanticQuery.pipe(
-                  Effect.flatMap((query) =>
-                    searchGraphWithPreparedSemanticQuery({
-                      query,
-                      scope: searchScope,
-                      strategy,
-                    }),
-                  ),
-                )
-          }
-          case "Text":
-            if (textPolicy === "disabled") {
-              return yield* Effect.fail(
-                new InvalidSearchQuery({ reason: "text_disabled" }),
-              )
-            }
-            return yield* searchGraphText({
-              query: inputSearch.query,
-              scope: searchScope,
-              strategy: text({
-                policy: textPolicy,
-                candidates: inputSearch.plan.textCandidates,
-                results: inputSearch.plan.results,
-                weight: inputSearch.plan.strategy.weight,
-                rankConstant: inputSearch.plan.strategy.rankConstant,
-              }),
-            })
-          case "Hybrid": {
-            if (textPolicy === "disabled") {
-              return yield* Effect.fail(
-                new InvalidSearchQuery({ reason: "text_disabled" }),
-              )
-            }
-            const hybridInput = {
-              scope: searchScope,
-              route: {
-                _tag: "Projection",
-                sourceKind: inputSearch.documentKind,
-                projection: inputSearch.projection.id,
-              },
-              semantic: semantic({
-                candidates: inputSearch.plan.semanticCandidates,
-                results: inputSearch.plan.semanticCandidates,
-                weight: inputSearch.plan.strategy.weights.semantic,
-                rankConstant: inputSearch.plan.strategy.rankConstant,
-              }),
-              text: text({
-                policy: textPolicy,
-                candidates: inputSearch.plan.textCandidates,
-                results: inputSearch.plan.textCandidates,
-                weight: inputSearch.plan.strategy.weights.text,
-                rankConstant: inputSearch.plan.strategy.rankConstant,
-              }),
-              results: inputSearch.plan.results,
-              rankConstant: inputSearch.plan.strategy.rankConstant,
-            } as const
-            return inputSearch.semanticQuery === undefined
-              ? yield* searchGraphHybrid({
-                  ...hybridInput,
-                  query: inputSearch.query,
-                })
-              : yield* searchGraphHybridWithSemanticQuery({
-                  ...hybridInput,
-                  query: inputSearch.query,
-                  semanticQuery: inputSearch.semanticQuery,
-                })
-          }
-        }
+      const executionPlan = yield* compileProjectionSearchPlan({
+        scope: searchScope,
+        route: {
+          _tag: "Projection",
+          sourceKind: inputSearch.documentKind,
+          projection: inputSearch.projection.id,
+        },
+        strategy: inputSearch.plan.strategy,
+        textPolicy,
+        results: inputSearch.plan.results,
+        semanticCandidates: inputSearch.plan.semanticCandidates,
+        textCandidates: inputSearch.plan.textCandidates,
+      })
+      const searchHits = yield* executeProjectionSearch({
+        query: inputSearch.query,
+        semanticQuery: inputSearch.semanticQuery,
+        plan: executionPlan,
       })
 
       return yield* Effect.forEach(searchHits, (hit) => {
@@ -1334,11 +1168,6 @@ export const defineDocumentGraph = <
       })
     })
 
-  type RuntimeNeighbour = {
-    readonly documentKey: DocumentKey
-    readonly reference: DocumentReference<GraphId, Documents>
-  }
-
   const findRuntimeNeighbours = (inputNeighbour: {
     readonly currentDocumentKey: DocumentKey
     readonly currentDocumentKind: string
@@ -1346,113 +1175,32 @@ export const defineDocumentGraph = <
     readonly direction: "outgoing" | "incoming"
     readonly limit: GraphNeighbourLimit
   }): Effect.Effect<
-    ReadonlyArray<RuntimeNeighbour>,
+    ReadonlyArray<{
+      readonly documentKey: DocumentKey
+      readonly reference: DocumentReference<GraphId, Documents>
+    }>,
     | InvalidDocumentIdentity
     | InvalidDocumentReference
     | InvalidGraphNeighbourOutput
     | GraphRelationStoreFailed,
     GraphRelationStore
-  > => {
-    const relation = relations[inputNeighbour.relationId]
-    const currentKind =
-      inputNeighbour.direction === "outgoing"
-        ? relation?.from
-        : relation?.to
-    if (
-      relation === undefined ||
-      currentKind !== inputNeighbour.currentDocumentKind
-    ) {
-      return Effect.die(
-        new Error(
-          `Unknown ${inputNeighbour.direction} relation ${inputNeighbour.relationId} for ${inputNeighbour.currentDocumentKind}`,
-        ),
-      )
-    }
-
-    return Effect.gen(function*() {
-      const store = yield* GraphRelationStore
-      const stored = yield* (inputNeighbour.direction === "outgoing"
-        ? store.findOutgoing({
-            graph: input.id,
-            sourceDocumentKey: inputNeighbour.currentDocumentKey,
-            sourceDocumentKind: inputNeighbour.currentDocumentKind,
-            relation: inputNeighbour.relationId,
-            relationVersion: relation.version,
-            targetDocumentKind: relation.to,
-            limit: inputNeighbour.limit,
-          })
-        : store.findIncoming({
-            graph: input.id,
-            targetDocumentKey: inputNeighbour.currentDocumentKey,
-            targetDocumentKind: inputNeighbour.currentDocumentKind,
-            relation: inputNeighbour.relationId,
-            relationVersion: relation.version,
-            sourceDocumentKind: relation.from,
-            limit: inputNeighbour.limit,
-          }))
-      const neighbourKind =
-        inputNeighbour.direction === "outgoing"
-          ? relation.to
-          : relation.from
-      if (stored.length > inputNeighbour.limit) {
-        return yield* Effect.fail(
-          new InvalidGraphNeighbourOutput({ reason: "too_many" }),
-        )
-      }
-
-      const seen = new Set<DocumentKey>()
-      let previousKey: DocumentKey | undefined
-      for (const candidate of stored) {
-        if (seen.has(candidate.documentKey)) {
-          return yield* Effect.fail(
-            new InvalidGraphNeighbourOutput({ reason: "duplicate" }),
-          )
-        }
-        if (
-          previousKey !== undefined &&
-          String(previousKey).localeCompare(
-            String(candidate.documentKey),
-          ) > 0
-        ) {
-          return yield* Effect.fail(
-            new InvalidGraphNeighbourOutput({ reason: "not_ordered" }),
-          )
-        }
-        seen.add(candidate.documentKey)
-        previousKey = candidate.documentKey
-      }
-
-      return yield* Effect.forEach(stored, (candidate) =>
-        parseReference(candidate.reference).pipe(
-          Effect.flatMap((reference) => {
-            if (reference.kind !== neighbourKind) {
-              return Effect.fail(
-                invalidReference("unknown_document_kind"),
-              )
-            }
-
-            return key(reference).pipe(
-              Effect.flatMap((parsedKey) =>
-                parsedKey === candidate.documentKey
-                  ? Effect.succeed({
-                      documentKey: candidate.documentKey,
-                      reference,
-                    })
-                  : Effect.fail(
-                      invalidReference("invalid_document_id"),
-                    ),
-              ),
-            )
-          }),
-        ),
-      )
-    })
-  }
+  > => findGraphNeighboursWorkflow({
+    graph: input.id,
+    relations,
+    ...inputNeighbour,
+    parseReference,
+    referenceKind: (reference) => reference.kind,
+    referenceKey: key,
+  })
 
   const document = <Kind extends DocumentKind<Documents>>(
     kind: Kind,
   ): GraphDocumentHandle<GraphId, Documents, Relations, Kind> => {
-    const definition = input.documents[kind]
+    // SAFETY: The compiled lookup was created directly from Documents and the
+    // requested Kind indexes that same definition map.
+    const definition = compiled.documentsByKind.get(kind) as
+      | Documents[Kind]
+      | undefined
     if (definition === undefined) {
       throw new Error(`Unknown document kind: ${kind}`)
     }
@@ -1468,9 +1216,9 @@ export const defineDocumentGraph = <
       Kind,
       ProjectionId
     > => {
-      const registeredProjection = definition.projections.find(
-        (candidate) => candidate.id === projectionId,
-      )
+      const registeredProjection = compiled.projectionsByDocumentKind
+        .get(kind)
+        ?.get(projectionId)
       if (registeredProjection === undefined) {
         throw new Error(
           `Unknown projection ${projectionId} for document ${kind}`,
@@ -1602,48 +1350,13 @@ export const defineDocumentGraph = <
       projection,
       index: (value) =>
         exposeIndexOperation(
-          Effect.gen(function*() {
-            const document = yield* parseDocumentInstance({
-              graph: input.id,
-              documentKind: kind,
-              definition,
-              value,
-            })
-            const projectedRevisions = yield* Effect.forEach(
-              definition.projections,
-              (item) =>
-                projectParsedDocument(
-                  input.id,
-                  input.documents,
-                  kind,
-                  item.id,
-                  document,
-                ),
-            )
-            const replacement =
-              yield* projectOutgoingGraphRelationsForInstance({
-              graph: input.id,
-              documentKind: kind,
-              documents: input.documents,
-              relations,
-              document,
-            })
-            const projections = yield* Effect.forEach(
-              projectedRevisions,
-              (revision) =>
-                indexProjectedRevision(revision).pipe(
-                  Effect.map((result) => ({
-                    projection: revision.projection.id,
-                    result,
-                  })),
-                ),
-            )
-            const relationStore = yield* GraphRelationStore
-            const relationCommit = yield* relationStore.replaceOutgoing(
-              replacement,
-            )
-
-            return { projections, relations: relationCommit }
+          indexGraphDocumentWorkflow({
+            graph: input.id,
+            documentKind: kind,
+            documents: input.documents,
+            relations,
+            definition,
+            value,
           }),
           {
             "document_graph.graph": input.id,
@@ -1652,34 +1365,12 @@ export const defineDocumentGraph = <
         ),
       remove: (id) =>
         Effect.gen(function*() {
-          const projectionStore = yield* ProjectionIndexStore
           const documentKey = yield* key(ref(kind, id))
-          const deletions = yield* Effect.forEach(
-            definition.projections,
-            (item) =>
-              projectionStore.deleteRevision({
-                documentKey,
-                projection: item.id,
-              }),
-          )
-          const projectionDeletion = deletions.reduce(
-            (total, deletion) => ({
-              deletedRevisions:
-                total.deletedRevisions + deletion.deletedRevisions,
-              deletedChunks: total.deletedChunks + deletion.deletedChunks,
-            }),
-            { deletedRevisions: 0, deletedChunks: 0 },
-          )
-          const relationStore = yield* GraphRelationStore
-          const relationDeletion = yield* relationStore.deleteNode({
+          return yield* removeGraphDocumentWorkflow({
             graph: input.id,
             documentKey,
+            projections: definition.projections.map((item) => item.id),
           })
-
-          return {
-            ...projectionDeletion,
-            deletedRelations: relationDeletion.deleted,
-          }
         }).pipe(
           Effect.catchTags({
             ProjectionIndexStoreFailed: failStoredOperation("remove"),
@@ -2281,28 +1972,15 @@ export const defineDocumentGraph = <
 
   return {
     id: input.id,
-    manifest: makeDocumentGraphManifest(input, relations),
+    manifest: compiled.manifest,
     document,
     retrieval,
     parseReference,
     reconcileIndex: () =>
-      Effect.gen(function*() {
-        const projectionStore = yield* ProjectionIndexStore
-        const projectionPrune = yield* projectionStore.pruneGraph({
-          graph: input.id,
-          registered,
-        })
-        const relationStore = yield* GraphRelationStore
-        const relationPrune = yield* relationStore.pruneRelations({
-          graph: input.id,
-          registered: registeredRelations,
-        })
-
-        return {
-          deletedRevisions: projectionPrune.deletedRevisions,
-          deletedChunks: projectionPrune.deletedChunks,
-          deletedRelations: relationPrune.deleted,
-        }
+      reconcileDocumentGraphWorkflow({
+        graph: input.id,
+        registeredProjections: registered,
+        registeredRelations,
       }).pipe(
         Effect.catchTags({
           ProjectionIndexStoreFailed:
@@ -2352,3 +2030,13 @@ export const defineDocumentGraph = <
       ),
   }
 }
+
+/** Compile a pure graph definition, then bind its cohesive Effect workflows. */
+export const defineDocumentGraph = <
+  const GraphId extends string,
+  const Documents extends DocumentDefinitions,
+  const Relations extends GraphRelationDefinitions = {},
+>(
+  input: DefineDocumentGraphInput<GraphId, Documents, Relations>,
+): DocumentGraph<GraphId, Documents, Relations> =>
+  bindDocumentGraph(compileDocumentGraph(input))

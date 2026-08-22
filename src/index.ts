@@ -139,6 +139,9 @@ export {
   EmbeddingProfileIdSchema,
   EmbeddingProfileVersionSchema,
   EmbeddingProvider,
+  EmbeddingProviderFailed,
+  InvalidEmbeddingOutput,
+  type EmbeddedContent,
   type EmbeddingDimensions,
   type EmbeddingProfile,
   type EmbeddingProfileId,
@@ -148,6 +151,24 @@ export {
 } from "./indexing/embedding-provider.js"
 
 export { ProjectionIndexConflict } from "./indexing/projection-index.js"
+
+export {
+  DuplicatePreparedMutation,
+  prepareGraphMutation,
+  replayPreparedGraphMutation,
+  type GraphMutationTarget,
+  type PreparedGraphMutation,
+  type PreparedGraphMutationOperation,
+  type PreparedGraphMutationResult,
+  type PreparedMutationReplayReport,
+} from "./indexing/prepared-mutation.js"
+
+export {
+  evidenceReferenceFromHit,
+  verifyEvidenceCurrency,
+  type EvidenceCurrency,
+  type EvidenceReference,
+} from "./retrieval/evidence-currency.js"
 
 export {
   GroundingHydrator,

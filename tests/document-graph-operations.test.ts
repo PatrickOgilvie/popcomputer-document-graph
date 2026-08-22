@@ -16,7 +16,6 @@ import {
   ProjectionSearchStoreFailed,
   ProjectionTextSearchStore,
   ProjectionTextSearchStoreFailed,
-  semantic,
   toDocumentGraphErrorTelemetry,
   type EmbeddingProviderService,
   type GraphRelationStoreService,
@@ -27,6 +26,7 @@ import {
   type ReplaceProjectedRevision,
 } from "../src/adapter.js"
 import { makeChunkId } from "../src/document/document-identity.js"
+import { semantic } from "../src/retrieval/graph-retrieval.js"
 
 const GuideId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("GraphOperationGuideId"),
@@ -135,7 +135,8 @@ const makeServices = (input: {
   }
 
   const indexStore: ProjectionIndexStoreService = {
-    loadRevision: () => Effect.succeed(Option.none()),
+    loadRevisions: (keys) =>
+      Effect.succeed(keys.map((key) => ({ key, revision: Option.none() }))),
     replaceRevision: (next) => {
       replacement = next
       return Effect.succeed({
@@ -884,6 +885,9 @@ describe("document graph operations", () => {
     expect(
       JSON.stringify(Object.fromEntries(span?.attributes ?? [])),
     ).not.toContain(guide.content)
+    expect(observed.map((candidate) => candidate.name)).toContain(
+      "ProjectionSearch.execute",
+    )
   })
 })
 

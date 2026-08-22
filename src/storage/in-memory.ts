@@ -19,7 +19,6 @@ import {
   projectionMatchesGraphSearchScope,
   ProjectionSearchStore,
   ProjectionTextSearchStore,
-  type ProjectionTextSearchStoreService,
 } from "../retrieval/graph-retrieval.js"
 import { evaluateMetadataFilter } from "../retrieval/metadata-filter.js"
 import {
@@ -284,20 +283,24 @@ const collectStoredCandidates = (input: {
     .map(projectStoredCandidate)
 }
 
-const makeInMemoryStorage = (): DocumentGraphStorageService &
-  ProjectionTextSearchStoreService => {
+const makeInMemoryStorage = (): DocumentGraphStorageService => {
   const revisions = new Map<string, StoredRevision>()
   const edges = new Map<string, StoredGraphEdge>()
   let tokenSequence = 0
 
   return {
-    loadRevision: (key) =>
-      Effect.sync(() => {
-        const revision = revisions.get(storageKey(key))
-        return revision === undefined
-          ? Option.none()
-          : Option.some(cloneSnapshot(revision.snapshot))
-      }),
+    loadRevisions: (keys) =>
+      Effect.sync(() =>
+        keys.map((key) => {
+          const revision = revisions.get(storageKey(key))
+          return {
+            key,
+            revision: revision === undefined
+              ? Option.none()
+              : Option.some(cloneSnapshot(revision.snapshot)),
+          }
+        })
+      ),
 
     replaceRevision: (replacement) =>
       Effect.gen(function*() {
@@ -620,8 +623,5 @@ export const inMemoryDocumentGraph = (): Layer.Layer<
   | GraphRelationStore
 > => {
   const storage = makeInMemoryStorage()
-  return Layer.merge(
-    makeDocumentGraphStorage(storage),
-    Layer.succeed(ProjectionTextSearchStore, storage),
-  )
+  return makeDocumentGraphStorage(storage)
 }

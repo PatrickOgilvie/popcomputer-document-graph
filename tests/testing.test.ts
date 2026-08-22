@@ -54,7 +54,7 @@ describe("adapter conformance", () => {
     )
 
     expect(report.projectionIndex.capability).toBe("projection_index")
-    expect(report.projectionIndex.verified).toHaveLength(8)
+    expect(report.projectionIndex.verified).toHaveLength(9)
     expect(report.graphRelations).toEqual({
       capability: "graph_relations",
       verified: [
@@ -85,6 +85,7 @@ describe("adapter conformance", () => {
       verified: [
         "complete_replacement",
         "snapshot_inventory",
+        "ordered_batch_lookup",
         "content_hash_reuse",
         "optimistic_conflict",
         "invalid_replacement_atomicity",

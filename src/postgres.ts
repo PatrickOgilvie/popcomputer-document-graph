@@ -3,4 +3,11 @@ export {
   postgresDocumentGraph,
 } from "./storage/postgres/runtime.js"
 
-export type { PostgresDocumentGraphConfig } from "./storage/postgres/connection.js"
+export {
+  postgresTransactionClient,
+} from "./storage/postgres/connection.js"
+
+export type {
+  PostgresDocumentGraphConfig,
+  PostgresQueryClient,
+} from "./storage/postgres/connection.js"

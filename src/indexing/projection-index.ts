@@ -269,7 +269,7 @@ export class ProjectionIndexStoreFailed extends Schema.TaggedError<
   ProjectionIndexStoreFailed
 >()("ProjectionIndexStoreFailed", {
   operation: Schema.Literals([
-    "load_revision",
+    "load_revisions",
     "replace_revision",
     "delete_revision",
     "prune_graph",
@@ -288,11 +288,11 @@ export class ProjectionIndexConflict extends Schema.TaggedError<
 
 /** Persistence capability consumed by the indexing workflow. */
 export interface ProjectionIndexStoreService {
-  /** Load the current revision summary, if the projection is indexed. */
-  readonly loadRevision: (
-    key: ProjectionIndexKey,
+  /** Load current revision summaries in the same order as the requested keys. */
+  readonly loadRevisions: (
+    keys: readonly [ProjectionIndexKey, ...ReadonlyArray<ProjectionIndexKey>],
   ) => Effect.Effect<
-    Option.Option<IndexedRevisionSnapshot>,
+    ReadonlyArray<ProjectionRevisionLookup>,
     ProjectionIndexStoreFailed
   >
 
@@ -318,6 +318,12 @@ export interface ProjectionIndexStoreService {
   readonly pruneGraph: (
     input: PruneGraphIndex,
   ) => Effect.Effect<ProjectionIndexPrune, ProjectionIndexStoreFailed>
+}
+
+/** One ordered result from a batched projection revision lookup. */
+export interface ProjectionRevisionLookup {
+  readonly key: ProjectionIndexKey
+  readonly revision: Option.Option<IndexedRevisionSnapshot>
 }
 
 /** Effect service tag for vector and graph projection persistence. */
@@ -484,21 +490,21 @@ const snapshotProvesRevision = (
  * Existing vectors are reused by content hash only when the embedding profile
  * also matches. The store atomically replaces records and removes stale chunks.
  */
-export const indexProjectedRevision = (
+export const indexProjectedRevision: (
   revision: IndexableProjectedRevision,
-): Effect.Effect<
+) => Effect.Effect<
   IndexProjectedRevisionResult,
   IndexProjectedRevisionError,
   EmbeddingProvider | ProjectionIndexStore
-> =>
-  Effect.gen(function*() {
+> = Effect.fn("ProjectionIndex.indexRevision")(function*(revision) {
     const embeddings = yield* EmbeddingProvider
     const store = yield* ProjectionIndexStore
     const key: ProjectionIndexKey = {
       documentKey: revision.documentKey,
       projection: revision.projection.id,
     }
-    const current = yield* store.loadRevision(key)
+    const [lookup] = yield* store.loadRevisions([key])
+    const current = lookup?.revision ?? Option.none()
 
     if (
       Option.isSome(current) &&

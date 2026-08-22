@@ -16,21 +16,23 @@ import {
   metadataOneOf,
   ProjectionSearchStore,
   ProjectionTextSearchStore,
-  searchGraph,
-  searchGraphHybrid,
   sectionChunking,
-  semantic,
-  text,
   type EmbeddingProviderService,
   type GraphSearchScopeInput,
   type GroundingHydratorService,
   type ProjectionSearchStoreService,
   type ProjectionTextSearchStoreService,
-  type SearchGraphInput,
   type SearchHit,
   type SemanticSearchCandidate,
 } from "../src/adapter.js"
 import { parseTextSearchPolicy } from "../src/document/text-search-policy.js"
+import {
+  searchGraph,
+  searchGraphHybrid,
+  semantic,
+  text,
+  type SearchGraphInput,
+} from "../src/retrieval/graph-retrieval.js"
 
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("RetrievalArticleId"),

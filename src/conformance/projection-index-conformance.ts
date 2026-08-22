@@ -21,6 +21,7 @@ import { defineEmbeddingProfile } from "../indexing/embedding-provider.js"
 export const ProjectionIndexStoreConformanceLawSchema = Schema.Literals([
   "complete_replacement",
   "snapshot_inventory",
+  "ordered_batch_lookup",
   "content_hash_reuse",
   "optimistic_conflict",
   "invalid_replacement_atomicity",
@@ -280,11 +281,11 @@ const loadRequiredSnapshot = (
 ) =>
   Effect.gen(function*() {
     const store = yield* ProjectionIndexStore
-    const loaded = yield* store.loadRevision(key)
-    if (Option.isNone(loaded)) {
+    const [loaded] = yield* store.loadRevisions([key])
+    if (loaded === undefined || Option.isNone(loaded.revision)) {
       return yield* Effect.fail(violation(law))
     }
-    return loaded.value
+    return loaded.revision.value
   })
 
 const verifyRejectedWithoutMutation = (
@@ -312,6 +313,7 @@ const verifyRejectedWithoutMutation = (
 const verifiedLaws: ReadonlyArray<ProjectionIndexStoreConformanceLaw> = [
   "complete_replacement",
   "snapshot_inventory",
+  "ordered_batch_lookup",
   "content_hash_reuse",
   "optimistic_conflict",
   "invalid_replacement_atomicity",
@@ -427,13 +429,13 @@ export const verifyProjectionIndexStoreConformance = () =>
 
     const removed = yield* store.deleteRevision(fixture.reduced.key)
     const removedAgain = yield* store.deleteRevision(fixture.reduced.key)
-    const afterDelete = yield* store.loadRevision(fixture.reduced.key)
+    const [afterDelete] = yield* store.loadRevisions([fixture.reduced.key])
     if (
       removed.deletedRevisions !== 1 ||
       removed.deletedChunks !== 1 ||
       removedAgain.deletedRevisions !== 0 ||
       removedAgain.deletedChunks !== 0 ||
-      Option.isSome(afterDelete)
+      afterDelete === undefined || Option.isSome(afterDelete.revision)
     ) {
       return yield* Effect.fail(violation("idempotent_deletion"))
     }
@@ -446,16 +448,32 @@ export const verifyProjectionIndexStoreConformance = () =>
         { documentKind: DocumentKind, projection: ProjectionId },
       ],
     })
-    const activeAfterPrune = yield* store.loadRevision(fixture.initial.key)
-    const retiredAfterPrune = yield* store.loadRevision(fixture.retired.key)
+    const batch = yield* store.loadRevisions([
+      fixture.retired.key,
+      fixture.initial.key,
+      fixture.initial.key,
+    ])
+    const [retiredAfterPrune, activeAfterPrune, duplicateActive] = batch
     if (
       pruned.deletedRevisions !== 1 ||
-      pruned.deletedChunks !== 1 ||
-      Option.isNone(activeAfterPrune) ||
-      !snapshotMatches(activeAfterPrune.value, fixture.initial) ||
-      Option.isSome(retiredAfterPrune)
+      pruned.deletedChunks !== 1
     ) {
       return yield* Effect.fail(violation("schema_pruning"))
+    }
+    if (
+      retiredAfterPrune === undefined ||
+      activeAfterPrune === undefined ||
+      duplicateActive === undefined ||
+      Option.isSome(retiredAfterPrune.revision) ||
+      Option.isNone(activeAfterPrune.revision) ||
+      Option.isNone(duplicateActive.revision) ||
+      !snapshotMatches(activeAfterPrune.revision.value, fixture.initial) ||
+      !snapshotMatches(duplicateActive.revision.value, fixture.initial) ||
+      retiredAfterPrune.key !== fixture.retired.key ||
+      activeAfterPrune.key !== fixture.initial.key ||
+      duplicateActive.key !== fixture.initial.key
+    ) {
+      return yield* Effect.fail(violation("ordered_batch_lookup"))
     }
 
     yield* store.deleteRevision(fixture.initial.key)

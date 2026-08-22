@@ -661,14 +661,13 @@ export interface PreparedSemanticQuery {
 }
 
 /** Parse and embed a semantic query exactly once for a retrieval operation. */
-export const prepareSemanticQuery = (
+export const prepareSemanticQuery: (
   queryInput: string,
-): Effect.Effect<
+) => Effect.Effect<
   PreparedSemanticQuery,
   InvalidSearchQuery | EmbeddingProviderFailed | InvalidEmbeddingOutput,
   EmbeddingProvider
-> =>
-  Effect.gen(function*() {
+> = Effect.fn("GraphRetrieval.prepareSemanticQuery")(function*(queryInput) {
     const embeddings = yield* EmbeddingProvider
     const query = yield* parseSearchQuery(queryInput)
     const vector = yield* embeddings.embedQuery(query).pipe(
@@ -685,16 +684,15 @@ export const prepareSemanticQuery = (
   })
 
 /** Execute semantic retrieval with a query prepared by the package runtime. */
-export const searchGraphWithPreparedSemanticQuery = (
+export const searchGraphWithPreparedSemanticQuery: (
   input: Omit<SearchGraphInput, "query"> & {
     readonly query: PreparedSemanticQuery
   },
-): Effect.Effect<
+) => Effect.Effect<
   ReadonlyArray<SearchHit>,
   ProjectionSearchStoreFailed | InvalidSearchOutput,
   ProjectionSearchStore
-> =>
-  Effect.gen(function*() {
+> = Effect.fn("GraphRetrieval.searchSemanticPrepared")(function*(input) {
     const store = yield* ProjectionSearchStore
     const candidates = yield* store.searchCandidates({
       vector: input.query.vector,
@@ -716,14 +714,13 @@ export const searchGraphWithPreparedSemanticQuery = (
  * Storage adapters must apply the scope before ANN limiting. The core validates
  * every returned candidate again so an adapter cannot expose out-of-scope data.
  */
-export const searchGraph = (
+export const searchGraph: (
   input: SearchGraphInput,
-): Effect.Effect<
+) => Effect.Effect<
   ReadonlyArray<SearchHit>,
   SearchGraphError,
   EmbeddingProvider | ProjectionSearchStore
-> =>
-  Effect.gen(function*() {
+> = Effect.fn("GraphRetrieval.searchSemantic")(function*(input) {
     const query = yield* prepareSemanticQuery(input.query)
     return yield* searchGraphWithPreparedSemanticQuery({
       query,
@@ -738,14 +735,13 @@ export const searchGraph = (
  * Storage adapters must apply the complete scope before limiting candidates.
  * The core validates every returned candidate again at the trust boundary.
  */
-export const searchGraphText = (
+export const searchGraphText: (
   input: SearchGraphTextInput,
-): Effect.Effect<
+) => Effect.Effect<
   ReadonlyArray<SearchHit>,
   InvalidSearchQuery | ProjectionTextSearchStoreFailed | InvalidSearchOutput,
   ProjectionTextSearchStore
-> =>
-  Effect.gen(function*() {
+> = Effect.fn("GraphRetrieval.searchText")(function*(input) {
     const query = yield* parseSearchQuery(input.query)
     return yield* searchGraphTextWithParsedQuery({
       query,
@@ -954,18 +950,17 @@ export type SemanticQueryPreparation = Effect.Effect<
 >
 
 /** Execute hybrid retrieval while sharing one semantic query computation. */
-export const searchGraphHybridWithSemanticQuery = (
+export const searchGraphHybridWithSemanticQuery: (
   input: SearchGraphHybridInput & {
     readonly semanticQuery: SemanticQueryPreparation
   },
-): Effect.Effect<
+) => Effect.Effect<
   ReadonlyArray<SearchHit>,
   SearchGraphError,
   | EmbeddingProvider
   | ProjectionSearchStore
   | ProjectionTextSearchStore
-> =>
-  Effect.gen(function*() {
+> = Effect.fn("GraphRetrieval.searchHybridPrepared")(function*(input) {
     const [semanticHits, textHits] = yield* Effect.all(
       [
         input.semanticQuery.pipe(
@@ -990,16 +985,17 @@ export const searchGraphHybridWithSemanticQuery = (
   })
 
 /** Run semantic and text retrieval concurrently, then fuse ranks by chunk ID. */
-export const searchGraphHybrid = (
+export const searchGraphHybrid: (
   input: SearchGraphHybridInput,
-): Effect.Effect<
+) => Effect.Effect<
   ReadonlyArray<SearchHit>,
   SearchGraphError,
   | EmbeddingProvider
   | ProjectionSearchStore
   | ProjectionTextSearchStore
-> =>
-  searchGraphHybridWithSemanticQuery({
+> = Effect.fn("GraphRetrieval.searchHybrid")(function*(input) {
+  return yield* searchGraphHybridWithSemanticQuery({
     ...input,
     semanticQuery: prepareSemanticQuery(input.query),
   })
+})
