@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Effect, Layer, Option, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -9,10 +9,10 @@ import {
   type SearchDocumentGraphError,
 } from "../src/index.js"
 import {
-  GraphRelationStore,
+  GraphTopologyStore,
   ProjectionSearchStore,
   ProjectionTextSearchStore,
-  type GraphRelationStoreService,
+  type GraphTopologyStoreService,
   type ProjectionTextSearchStoreService,
 } from "../src/adapter.js"
 import { inMemoryDocumentGraph } from "../src/in-memory.js"
@@ -198,8 +198,8 @@ describe("graph retrieval plans", () => {
     }
   })
 
-  test("bounds data-sized neighbour expansion", async () => {
-    const work = Array.from({ length: 32 }, (_, index) => ({
+  test("batches data-sized neighbour expansion with at most 100 keys per read", async () => {
+    const work = Array.from({ length: 232 }, (_, index) => ({
       id: Schema.decodeSync(WorkId)(
         `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       ),
@@ -226,57 +226,67 @@ describe("graph retrieval plans", () => {
       }
     })
     const agencyKey = await Effect.runPromise(AgencyNode.key(agencyId))
+    const batchSizes: Array<number> = []
     let active = 0
     let maximumActive = 0
     const textStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) =>
         Effect.succeed(candidates.slice(0, request.candidates)),
     }
-    const relationStore: GraphRelationStoreService = {
-      replaceOutgoing: () =>
+    const topologyStore: GraphTopologyStoreService = {
+      replaceDocumentTopology: () =>
         Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
-      deleteNode: () => Effect.succeed({ deleted: 0 }),
-      pruneRelations: () => Effect.succeed({ deleted: 0 }),
-      findOutgoing: () =>
+      deleteNode: () =>
+        Effect.succeed({
+          deletedNodes: 0,
+          deletedRelations: 0,
+          deletedReferencedNodes: 0,
+        }),
+      pruneTopology: () =>
+        Effect.succeed({
+          deletedRelations: 0,
+          deletedReferencedNodes: 0,
+        }),
+      listNodes: () =>
+        Effect.succeed({ nodes: [], next: Option.none() }),
+      findRelatedNodes: (request) =>
         Effect.acquireUseRelease(
           Effect.sync(() => {
+            batchSizes.push(request.documentKeys.length)
             active += 1
             maximumActive = Math.max(maximumActive, active)
           }),
           () =>
             Effect.sleep("5 millis").pipe(
-              Effect.as([
-                {
-                  documentKey: agencyKey,
-                  reference: AgencyNode.ref(agencyId),
-                },
-              ]),
+              Effect.as(request.documentKeys.map((documentKey) => ({
+                documentKey,
+                nodes: [{ documentKey: agencyKey, reference: AgencyNode.ref(agencyId), state: "Materialized" as const }],
+              }))),
             ),
           () =>
             Effect.sync(() => {
               active -= 1
             }),
         ),
-      findIncoming: () => Effect.succeed([]),
     }
 
     const result = await Effect.runPromise(
       FindAgenciesFromWork.search("national", {
-        candidates: { text: 32 },
+        candidates: { text: 232 },
         limit: 1,
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
             Layer.succeed(ProjectionTextSearchStore, textStore),
-            Layer.succeed(GraphRelationStore, relationStore),
+            Layer.succeed(GraphTopologyStore, topologyStore),
           ),
         ),
       ),
     )
 
     expect(result).toHaveLength(1)
-    expect(maximumActive).toBeGreaterThan(1)
-    expect(maximumActive).toBeLessThanOrEqual(4)
+    expect(maximumActive).toBe(1)
+    expect(batchSizes).toEqual([100, 100, 32])
   })
 
   test("traverses once for multiple candidate chunks from one source document", async () => {
@@ -312,21 +322,29 @@ describe("graph retrieval plans", () => {
       searchTextCandidates: (request) =>
         Effect.succeed(candidates.slice(0, request.candidates)),
     }
-    const relationStore: GraphRelationStoreService = {
-      replaceOutgoing: () =>
+    const topologyStore: GraphTopologyStoreService = {
+      replaceDocumentTopology: () =>
         Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
-      deleteNode: () => Effect.succeed({ deleted: 0 }),
-      pruneRelations: () => Effect.succeed({ deleted: 0 }),
-      findOutgoing: () => {
+      deleteNode: () =>
+        Effect.succeed({
+          deletedNodes: 0,
+          deletedRelations: 0,
+          deletedReferencedNodes: 0,
+        }),
+      pruneTopology: () =>
+        Effect.succeed({
+          deletedRelations: 0,
+          deletedReferencedNodes: 0,
+        }),
+      listNodes: () =>
+        Effect.succeed({ nodes: [], next: Option.none() }),
+      findRelatedNodes: (request) => {
         traversals += 1
-        return Effect.succeed([
-          {
-            documentKey: agencyKey,
-            reference: AgencyNode.ref(agencyId),
-          },
-        ])
+        return Effect.succeed(request.documentKeys.map((documentKey) => ({
+          documentKey,
+          nodes: [{ documentKey: agencyKey, reference: AgencyNode.ref(agencyId), state: "Materialized" as const }],
+        })))
       },
-      findIncoming: () => Effect.succeed([]),
     }
 
     const result = await Effect.runPromise(
@@ -337,7 +355,7 @@ describe("graph retrieval plans", () => {
         Effect.provide(
           Layer.mergeAll(
             Layer.succeed(ProjectionTextSearchStore, textStore),
-            Layer.succeed(GraphRelationStore, relationStore),
+            Layer.succeed(GraphTopologyStore, topologyStore),
           ),
         ),
       ),
@@ -435,7 +453,7 @@ if (import.meta.url === "") {
   const relatedTextAction: Effect.Effect<
     unknown,
     SearchDocumentGraphError,
-    ProjectionTextSearchStore | GraphRelationStore
+    ProjectionTextSearchStore | GraphTopologyStore
   > = FindAgencies.search("query")
   void relatedTextAction
 

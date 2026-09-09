@@ -143,11 +143,13 @@ export const registeredGraphProjections = (
 ): ReadonlyArray<{
   readonly documentKind: string
   readonly projection: string
+  readonly projectionVersion: string
 }> =>
   Object.entries(documents).flatMap(([documentKind, definition]) =>
     definition.projections.map((projection) => ({
       documentKind,
       projection: projection.id,
+      projectionVersion: projection.version,
     })),
   )
 

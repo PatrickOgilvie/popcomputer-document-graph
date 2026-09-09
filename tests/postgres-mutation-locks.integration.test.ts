@@ -5,7 +5,7 @@ import {
   defineDocumentGraph,
   defineEmbeddingProfile,
   EmbeddingProvider,
-  GraphRelationStore,
+  GraphTopologyStore,
   ProjectionIndexStore,
   sectionChunking,
   type EmbeddingProviderService,
@@ -160,6 +160,7 @@ const replacementOf = (
     expectedToken: Option.none(),
     encodedTarget: revision.encodedTarget,
     projectionVersion: revision.projection.version,
+    textPolicy: revision.textPolicy,
     revisionHash: revision.revisionHash,
     embeddingProfile: profile,
     chunks: [
@@ -233,10 +234,10 @@ describe("postgresDocumentGraph mutation locking", () => {
     await Effect.runPromise(
       Effect.gen(function*() {
         const store = yield* ProjectionIndexStore
-        const relations = yield* GraphRelationStore
+        const relations = yield* GraphTopologyStore
         yield* store.replaceRevision(replacement)
         yield* ArticleNode.remove(Schema.decodeSync(ArticleId)(sourceId))
-        yield* relations.replaceOutgoing(relationReplacement)
+        yield* relations.replaceDocumentTopology(relationReplacement)
       }).pipe(Effect.provide(live)),
     )
 
@@ -303,7 +304,11 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
     pool: Pool,
     schema: string,
   ): Promise<void> => {
-    for (const file of ["0001_initial.sql", "0002_mutation_locks.sql"]) {
+    for (const file of [
+      "0001_initial.sql",
+      "0002_mutation_locks.sql",
+      "0003_graph_topology.sql", "0004_native_vector_eligibility.sql",
+    ]) {
       const migration = await readFile(
         new URL(`../migrations/postgres/${file}`, import.meta.url),
         "utf8",
@@ -454,8 +459,8 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
           ),
           Effect.runPromise(
             Effect.gen(function*() {
-              const relations = yield* GraphRelationStore
-              return yield* Effect.result(relations.replaceOutgoing({
+              const relations = yield* GraphTopologyStore
+              return yield* Effect.result(relations.replaceDocumentTopology({
                 graph: graph.id,
                 sourceDocumentKey: revision.documentKey,
                 source: { graph: graph.id, kind: "Article", id: sourceId },

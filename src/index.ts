@@ -35,7 +35,11 @@ export {
   type DefineDocumentGraphInput,
   type AnyGraphSearchHit,
   type DocumentGraph,
+  type DocumentGraphNode,
+  type DocumentGraphNodePage,
+  type DocumentGraphNodesOptions,
   type DocumentGraphSearchOptions,
+  type DocumentGraphSearchWithinOptions,
   type DefineGraphRetrievalInput,
   type DirectRetrievalRoute,
   type GraphDocumentHandle,
@@ -107,6 +111,26 @@ export {
 } from "./graph/graph-relation.js"
 
 export {
+  GraphNodePageLimitSchema,
+  GraphNodeStateSchema,
+  GraphTopologyStore,
+  GraphTopologyStoreFailed,
+  InvalidGraphTopologyOutput,
+  type FindRelatedGraphNodes,
+  type RelatedGraphNodeSet,
+  type GraphNodePage,
+  type GraphNodePageLimit,
+  type GraphNodeState,
+  type GraphTopologyDeletion,
+  type GraphTopologyPrune,
+  type GraphTopologyStoreService,
+  type ListGraphNodes,
+  type PruneGraphTopology,
+  type ReplaceDocumentTopology,
+  type StoredGraphNode,
+} from "./graph/graph-topology.js"
+
+export {
   DocumentChunkingFailed,
   InvalidVectorProjectionOutput,
   type DocumentProjectionId,
@@ -153,11 +177,17 @@ export {
 export { ProjectionIndexConflict } from "./indexing/projection-index.js"
 
 export {
+  decodePreparedGraphMutation,
   DuplicatePreparedMutation,
+  encodePreparedGraphMutation,
+  InvalidPreparedGraphMutationArtifact,
   prepareGraphMutation,
+  PreparedGraphMutationArtifactSchema,
+  PreparedGraphMutationArtifactSchemaVersion,
   replayPreparedGraphMutation,
   type GraphMutationTarget,
   type PreparedGraphMutation,
+  type PreparedGraphMutationArtifact,
   type PreparedGraphMutationOperation,
   type PreparedGraphMutationResult,
   type PreparedMutationReplayReport,

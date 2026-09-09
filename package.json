@@ -1,6 +1,6 @@
 {
   "name": "@popcomputer/document-graph",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Schema-defined document graphs with hybrid search, graph retrieval, and composable storage",
   "type": "module",
   "main": "./dist/index.js",
@@ -15,6 +15,14 @@
       "types": "./dist/adapter.d.ts",
       "import": "./dist/adapter.js"
     },
+    "./d1": {
+      "types": "./dist/d1.d.ts",
+      "import": "./dist/d1.js"
+    },
+    "./d1/schema": {
+      "types": "./dist/d1-schema.d.ts",
+      "import": "./dist/d1-schema.js"
+    },
     "./in-memory": {
       "types": "./dist/in-memory.d.ts",
       "import": "./dist/in-memory.js"
@@ -26,6 +34,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
+    },
+    "./turbopuffer": {
+      "types": "./dist/turbopuffer.d.ts",
+      "import": "./dist/turbopuffer.js"
     }
   },
   "files": [
@@ -43,9 +55,11 @@
     "check": "tsc --noEmit && tsc -p tsconfig.type-tests.json",
     "lint": "oxlint",
     "test": "bun test",
+    "test:live:turbopuffer": "RUN_DOCUMENT_GRAPH_TURBOPUFFER_TESTS=true bun test tests/turbopuffer-live.integration.test.ts",
     "test:node": "bun run build && node tests/node-esm-smoke.mjs",
+    "test:workers": "vitest run --config vitest.config.workers.ts",
     "test:types": "tsc -p tsconfig.type-tests.json",
-    "verify": "bun run lint && bun run check && bun test && bun run test:node",
+    "verify": "bun run lint && bun run check && bun test && bun run test:workers && bun run test:node",
     "prepack": "bun run build",
     "prepublishOnly": "bun run verify"
   },
@@ -74,17 +88,24 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.3.0",
+    "@turbopuffer/turbopuffer": "2.8.0",
+    "@types/pg": "^8.15.5",
+    "drizzle-orm": "0.45.2",
     "pg": "^8.16.3"
   },
   "peerDependencies": {
     "effect": "^4.0.0-rc.109"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "5.20260815.1",
+    "@effect/vitest": "4.0.0-rc.109",
     "@oxlint/plugins": "1.78.0",
     "@types/bun": "^1.3.14",
-    "@types/pg": "^8.15.5",
+    "drizzle-kit": "0.31.10",
     "effect": "4.0.0-rc.109",
     "oxlint": "1.78.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "4.1.0"
   }
 }

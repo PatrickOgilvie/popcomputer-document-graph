@@ -38,5 +38,5 @@ export class InvalidGraphRelationDefinition extends Schema.TaggedError<
 export class InvalidGraphTraversal extends Schema.TaggedError<
   InvalidGraphTraversal
 >()("InvalidGraphTraversal", {
-  reason: Schema.Literal("invalid_limit"),
+  reason: Schema.Literals(["invalid_limit", "invalid_options"]),
 }) {}

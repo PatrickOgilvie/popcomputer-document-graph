@@ -105,6 +105,7 @@ describe("application API", () => {
       "document",
       "id",
       "manifest",
+      "nodes",
       "parseReference",
       "reconcileIndex",
       "retrieval",

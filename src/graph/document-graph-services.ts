@@ -7,7 +7,7 @@ import type {
   ProjectionIndexStore,
 } from "../indexing/projection-index.js"
 import type { EmbeddingProvider } from "../indexing/embedding-provider.js"
-import type { GraphRelationStore } from "./graph-relation.js"
+import type { GraphTopologyStore } from "./graph-topology.js"
 
 /** Services a Honertia application may add to its shared Effect environment. */
 export type DocumentGraphServices =
@@ -15,5 +15,5 @@ export type DocumentGraphServices =
   | ProjectionIndexStore
   | ProjectionSearchStore
   | ProjectionTextSearchStore
-  | GraphRelationStore
+  | GraphTopologyStore
   | GroundingHydrator

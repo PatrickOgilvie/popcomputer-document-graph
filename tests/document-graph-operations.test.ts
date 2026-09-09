@@ -6,7 +6,7 @@ import {
   defineEmbeddingProfile,
   EmbeddingProvider,
   EmbeddingProviderFailed,
-  GraphRelationStore,
+  GraphTopologyStore,
   IndexRevisionTokenSchema,
   makeGraphSearchScope,
   ProjectionIndexConflict,
@@ -18,7 +18,7 @@ import {
   ProjectionTextSearchStoreFailed,
   toDocumentGraphErrorTelemetry,
   type EmbeddingProviderService,
-  type GraphRelationStoreService,
+  type GraphTopologyStoreService,
   type GraphSearchScopeInput,
   type ProjectionIndexStoreService,
   type ProjectionSearchStoreService,
@@ -82,7 +82,11 @@ const guideScope = (
   input: GraphSearchScopeInput<"Guide", "guide-content">,
 ) =>
   makeGraphSearchScope("graph-operations-test", input, [
-    { documentKind: "Guide", projection: "guide-content" },
+    {
+      documentKind: "Guide",
+      projection: "guide-content",
+      projectionVersion: "v1",
+    },
   ])
 
 const guideId = Schema.decodeSync(GuideId)(
@@ -214,13 +218,22 @@ const makeServices = (input: {
         : Effect.delay(result, `${input.textDelayMs} millis`)
     },
   }
-  const relationStore: GraphRelationStoreService = {
-    replaceOutgoing: () =>
+  const topologyStore: GraphTopologyStoreService = {
+    replaceDocumentTopology: () =>
       Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
-    deleteNode: () => Effect.succeed({ deleted: 0 }),
-    pruneRelations: () => Effect.succeed({ deleted: 0 }),
-    findOutgoing: () => Effect.succeed([]),
-    findIncoming: () => Effect.succeed([]),
+    deleteNode: () =>
+      Effect.succeed({
+        deletedNodes: 0,
+        deletedRelations: 0,
+        deletedReferencedNodes: 0,
+      }),
+    pruneTopology: () =>
+      Effect.succeed({
+        deletedRelations: 0,
+        deletedReferencedNodes: 0,
+      }),
+    listNodes: () => Effect.succeed({ nodes: [], next: Option.none() }),
+    findRelatedNodes: () => Effect.succeed([]),
   }
 
   return {
@@ -228,7 +241,7 @@ const makeServices = (input: {
     embeddings,
     indexStore,
     queries,
-    relationStore,
+    topologyStore,
     searchStore,
     searchRequests,
     textSearchRequests,
@@ -238,7 +251,7 @@ const makeServices = (input: {
       Layer.succeed(ProjectionIndexStore, indexStore),
       Layer.succeed(ProjectionSearchStore, searchStore),
       Layer.succeed(ProjectionTextSearchStore, textSearchStore),
-      Layer.succeed(GraphRelationStore, relationStore),
+      Layer.succeed(GraphTopologyStore, topologyStore),
     ),
   }
 }
@@ -649,7 +662,7 @@ describe("document graph operations", () => {
           Layer.mergeAll(
             Layer.succeed(EmbeddingProvider, failingEmbeddings),
             Layer.succeed(ProjectionIndexStore, services.indexStore),
-            Layer.succeed(GraphRelationStore, services.relationStore),
+            Layer.succeed(GraphTopologyStore, services.topologyStore),
           ),
         ),
         Effect.result,
@@ -785,7 +798,7 @@ describe("document graph operations", () => {
           Layer.mergeAll(
             Layer.succeed(EmbeddingProvider, services.embeddings),
             Layer.succeed(ProjectionIndexStore, conflictingStore),
-            Layer.succeed(GraphRelationStore, services.relationStore),
+            Layer.succeed(GraphTopologyStore, services.topologyStore),
           ),
         ),
         Effect.result,
@@ -817,7 +830,7 @@ describe("document graph operations", () => {
     }
     const layer = Layer.mergeAll(
       Layer.succeed(ProjectionIndexStore, failingStore),
-      Layer.succeed(GraphRelationStore, services.relationStore),
+      Layer.succeed(GraphTopologyStore, services.topologyStore),
     )
 
     const result = await Effect.runPromise(

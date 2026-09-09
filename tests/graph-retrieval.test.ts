@@ -4,6 +4,7 @@ import {
   defineDocument,
   defineDocumentGraph,
   defineEmbeddingProfile,
+  documentKeys,
   EmbeddingProvider,
   GroundingHydrationFailed,
   GroundingHydrator,
@@ -12,10 +13,13 @@ import {
   InvalidSearchOutput,
   InvalidSearchQuery,
   makeGraphSearchScope,
+  makeDocumentKey,
+  MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS,
   metadataEquals,
   metadataOneOf,
   ProjectionSearchStore,
   ProjectionTextSearchStore,
+  noDocuments,
   sectionChunking,
   type EmbeddingProviderService,
   type GraphSearchScopeInput,
@@ -320,6 +324,191 @@ describe("graph retrieval", () => {
     })
   })
 
+  test("short-circuits an empty graph target before semantic retrieval", async () => {
+    const embeddings = makeEmbeddingService()
+    const store = makeSearchStore([])
+
+    const hits = await runSearch(
+      {
+        query: "distribution",
+        scope: retrievalScope({ target: noDocuments() }),
+        strategy: semantic(),
+      },
+      embeddings.service,
+      store.service,
+    )
+
+    expect(hits).toEqual([])
+    expect(embeddings.queries).toEqual([])
+    expect(store.requests).toEqual([])
+  })
+
+  test("short-circuits an empty graph target before hybrid retrieval", async () => {
+    const embeddings = makeEmbeddingService()
+    const semanticStore = makeSearchStore([])
+    const textRequests: Array<unknown> = []
+    const textStore: ProjectionTextSearchStoreService = {
+      searchTextCandidates: (request) => {
+        textRequests.push(request)
+        return Effect.succeed([])
+      },
+    }
+    const textPolicy = parseTextSearchPolicy(undefined)
+    if (textPolicy === "disabled") {
+      throw new Error("The default text policy unexpectedly disabled search")
+    }
+    const semanticStrategy = semantic()
+
+    const hits = await Effect.runPromise(
+      searchGraphHybrid({
+        query: "distribution",
+        scope: retrievalScope({ target: noDocuments() }),
+        route: {
+          _tag: "Projection",
+          sourceKind: "Article",
+          projection: "sections",
+        },
+        semantic: semanticStrategy,
+        text: text({ policy: textPolicy }),
+        results: semanticStrategy.results,
+        rankConstant: semanticStrategy.rankConstant,
+      }).pipe(
+        Effect.provide(
+          Layer.succeed(EmbeddingProvider, embeddings.service),
+        ),
+        Effect.provide(
+          Layer.succeed(ProjectionSearchStore, semanticStore.service),
+        ),
+        Effect.provide(
+          Layer.succeed(ProjectionTextSearchStore, textStore),
+        ),
+      ),
+    )
+
+    expect(hits).toEqual([])
+    expect(embeddings.queries).toEqual([])
+    expect(semanticStore.requests).toEqual([])
+    expect(textRequests).toEqual([])
+  })
+
+  test("rejects candidates outside a resolved document-key target", async () => {
+    const revision = await Effect.runPromise(projectArticle())
+    const embeddings = makeEmbeddingService()
+    const store = makeSearchStore([makeCandidate(revision, 0, 0.9)])
+    const anotherDocumentKey = makeDocumentKey({
+      graph: "retrieval-test",
+      documentKind: "Article",
+      encodedId: "another-article",
+    })
+
+    const result = await Effect.runPromise(
+      searchGraph({
+        query: "distribution",
+        scope: retrievalScope({
+          target: documentKeys([anotherDocumentKey]),
+        }),
+        strategy: semantic(),
+      }).pipe(
+        Effect.provide(
+          Layer.succeed(EmbeddingProvider, embeddings.service),
+        ),
+        Effect.provide(
+          Layer.succeed(ProjectionSearchStore, store.service),
+        ),
+        Effect.result,
+      ),
+    )
+
+    expect(result).toEqual(
+      Result.fail(
+        new InvalidSearchOutput({
+          channel: "semantic",
+          reason: "out_of_scope",
+        }),
+      ),
+    )
+  })
+
+  test("rejects empty document-key targets during scope normalization", () => {
+    expect(() =>
+      makeGraphSearchScope("retrieval-test", {
+        // SAFETY: This deliberately bypasses the non-empty tuple type to test
+        // the runtime boundary presented to untyped adapter consumers.
+        target: {
+          _tag: "DocumentKeys",
+          documentKeys: [],
+        } as never,
+      }),
+    ).toThrow()
+  })
+
+  test("normalizes explicit graph targets and enforces their provider bound", () => {
+    const first = makeDocumentKey({
+      graph: "retrieval-test",
+      documentKind: "Article",
+      encodedId: "first-target",
+    })
+    const second = makeDocumentKey({
+      graph: "retrieval-test",
+      documentKind: "Article",
+      encodedId: "second-target",
+    })
+    const normalized = documentKeys([second, first, second])
+
+    expect([...normalized.documentKeys]).toEqual([first, second].sort())
+    expect(() =>
+      makeGraphSearchScope("retrieval-test", {
+        // SAFETY: This deliberately exceeds the runtime boundary that protects
+        // provider filters from an unbounded explicit graph population.
+        target: {
+          _tag: "DocumentKeys",
+          documentKeys: Array.from(
+            { length: MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS + 1 },
+            () => first,
+          ),
+        } as never,
+      }),
+    ).toThrow()
+  })
+
+  test("rejects stale registered projection versions at the boundary", async () => {
+    const revision = await Effect.runPromise(projectArticle())
+    const embeddings = makeEmbeddingService()
+    const store = makeSearchStore([makeCandidate(revision, 0, 0.9)])
+    const scope = makeGraphSearchScope("retrieval-test", {}, [
+      {
+        documentKind: "Article",
+        projection: "sections",
+        projectionVersion: "v2",
+      },
+    ])
+
+    const result = await Effect.runPromise(
+      searchGraph({
+        query: "distribution",
+        scope,
+        strategy: semantic(),
+      }).pipe(
+        Effect.provide(
+          Layer.succeed(EmbeddingProvider, embeddings.service),
+        ),
+        Effect.provide(
+          Layer.succeed(ProjectionSearchStore, store.service),
+        ),
+        Effect.result,
+      ),
+    )
+
+    expect(result).toEqual(
+      Result.fail(
+        new InvalidSearchOutput({
+          channel: "semantic",
+          reason: "out_of_scope",
+        }),
+      ),
+    )
+  })
+
   test("rejects a candidate whose key disagrees with its reference", async () => {
     const revision = await Effect.runPromise(projectArticle())
     const embeddings = makeEmbeddingService()
@@ -514,6 +703,44 @@ describe("graph retrieval", () => {
     )
     expect(embeddings.queries).toEqual([])
     expect(store.requests).toEqual([])
+  })
+
+  test("accepts 8,192 query characters and rejects the next character", async () => {
+    const embeddings = makeEmbeddingService()
+    const store = makeSearchStore([])
+    const maximumQuery = "q".repeat(8_192)
+
+    const hits = await runSearch(
+      {
+        query: maximumQuery,
+        scope: retrievalScope(),
+        strategy: semantic(),
+      },
+      embeddings.service,
+      store.service,
+    )
+    const tooLong = await Effect.runPromise(
+      searchGraph({
+        query: `${maximumQuery}q`,
+        scope: retrievalScope(),
+        strategy: semantic(),
+      }).pipe(
+        Effect.provide(
+          Layer.succeed(EmbeddingProvider, embeddings.service),
+        ),
+        Effect.provide(
+          Layer.succeed(ProjectionSearchStore, store.service),
+        ),
+        Effect.result,
+      ),
+    )
+
+    expect(hits).toEqual([])
+    expect(tooLong).toEqual(
+      Result.fail(new InvalidSearchQuery({ reason: "too_long" })),
+    )
+    expect(embeddings.queries).toEqual([maximumQuery])
+    expect(store.requests).toHaveLength(1)
   })
 
   test("rejects a query vector outside the provider profile", async () => {

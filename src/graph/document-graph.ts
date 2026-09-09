@@ -2,6 +2,7 @@ import {
   Array as EffectArray,
   Effect,
   Function as EffectFunction,
+  Option,
   Predicate,
   Schema,
 } from "effect"
@@ -19,13 +20,16 @@ import {
   type ProjectedRevision,
 } from "../document/document-projection.js"
 import {
+  DocumentKeySchema,
   type DocumentKey,
   type InvalidDocumentIdentity,
 } from "../document/document-identity.js"
 import {
   makeGraphSearchScope,
+  documentKeys,
   InvalidSearchOutput,
   InvalidSearchQuery,
+  noDocuments,
   prepareSemanticQuery,
   ProjectionSearchStore,
   ProjectionTextSearchStore,
@@ -34,6 +38,7 @@ import {
   semantic,
   type GraphSearchScope,
   type GraphSearchScopeInput,
+  type GraphSearchTarget,
   type SemanticQueryPreparation,
   type SearchGraphError,
   type SearchHit,
@@ -87,15 +92,20 @@ import {
 } from "./document-graph-operation.js"
 import {
   GraphNeighbourLimitSchema,
-  InvalidGraphNeighbourOutput,
   InvalidGraphRelationOutput,
-  GraphRelationStore,
   type GraphRelationCommit,
   type GraphNeighbourLimit,
   type DefineGraphRelation,
   type GraphRelationDefinitions,
-  type GraphRelationStoreFailed,
 } from "./graph-relation.js"
+import {
+  GraphTopologyStore,
+  GraphNodePageLimitSchema,
+  GraphNodeStateSchema,
+  InvalidGraphTopologyOutput,
+  type GraphNodeState,
+  type GraphTopologyStoreFailed,
+} from "./graph-topology.js"
 import type {
   VectorProjection,
   RegisteredVectorProjection,
@@ -185,7 +195,7 @@ type GraphNeighbours<
     | InvalidDocumentIdentity
     | InvalidGraphTraversal
     | DocumentGraphUnavailable,
-    GraphRelationStore
+    GraphTopologyStore
   >
 
   <RelationId extends IncomingRelationId<Relations, Kind>>(
@@ -210,7 +220,60 @@ type GraphNeighbours<
     | InvalidDocumentIdentity
     | InvalidGraphTraversal
     | DocumentGraphUnavailable,
-    GraphRelationStore
+    GraphTopologyStore
+  >
+}
+
+/** Bounds and semantic options for one relation-constrained search. */
+export interface DocumentGraphSearchWithinOptions<
+  Documents extends DocumentDefinitions,
+> {
+  /**
+   * Explicit maximum graph nodes admitted to downstream ranking.
+   *
+   * Topology selects a deterministic key-ordered population before the search
+   * provider ranks it, so callers must choose this bound deliberately.
+   */
+  readonly maximumDocuments: number
+  /** Ordinary graph search options applied after resolving eligible nodes. */
+  readonly search?: DocumentGraphSearchOptions<Documents>
+}
+
+/** Search only documents reached across one exact schema-declared relation. */
+type GraphSearchWithin<
+  GraphId extends string,
+  Documents extends DocumentDefinitions,
+  Relations extends GraphRelationDefinitions,
+  Kind extends DocumentKind<Documents>,
+> = {
+  <RelationId extends OutgoingRelationId<Relations, Kind>>(
+    id: DocumentId<Documents, Kind>,
+    query: string,
+    options: DocumentGraphSearchWithinOptions<Documents> & {
+      readonly via: RelationId
+      readonly direction?: "outgoing"
+    },
+  ): Effect.Effect<
+    ReadonlyArray<AnyGraphSearchHit<GraphId, Documents>>,
+    | InvalidDocumentIdentity
+    | InvalidGraphTraversal
+    | SearchDocumentGraphError,
+    EmbeddingProvider | ProjectionSearchStore | GraphTopologyStore
+  >
+
+  <RelationId extends IncomingRelationId<Relations, Kind>>(
+    id: DocumentId<Documents, Kind>,
+    query: string,
+    options: DocumentGraphSearchWithinOptions<Documents> & {
+      readonly via: RelationId
+      readonly direction: "incoming"
+    },
+  ): Effect.Effect<
+    ReadonlyArray<AnyGraphSearchHit<GraphId, Documents>>,
+    | InvalidDocumentIdentity
+    | InvalidGraphTraversal
+    | SearchDocumentGraphError,
+    EmbeddingProvider | ProjectionSearchStore | GraphTopologyStore
   >
 }
 
@@ -237,10 +300,10 @@ type GraphProjectionId<Documents extends DocumentDefinitions> = {
   [Kind in DocumentKind<Documents>]: DocumentProjectionId<Documents, Kind>
 }[DocumentKind<Documents>]
 
-// Four concurrent routes with four neighbour reads each cap adapter-neutral
-// relation-store pressure at sixteen operations per retrieval.
+// Each route expands one bounded source batch at a time; four concurrent
+// routes cap relation-store pressure at four reads per retrieval.
 const GraphRetrievalRouteConcurrency = 4
-const GraphNeighbourExpansionConcurrencyPerRoute = 4
+const GraphNeighbourBatchSize = 100
 
 /** Optional graph-owned constraints for one semantic search. */
 export interface DocumentGraphSearchOptions<
@@ -566,16 +629,35 @@ export interface GraphDocumentHandle<
     IndexGraphDocumentError,
     | EmbeddingProvider
     | ProjectionIndexStore
-    | GraphRelationStore
+    | GraphTopologyStore
   >
   readonly remove: (
     id: DocumentId<Documents, Kind>,
   ) => Effect.Effect<
     RemoveGraphDocumentResult,
     InvalidDocumentIdentity | DocumentGraphUnavailable,
-    ProjectionIndexStore | GraphRelationStore
+    ProjectionIndexStore | GraphTopologyStore
   >
   /** Traverse one schema-declared relation in its stored direction or reverse. */
+  readonly relatedNodes: GraphNeighbours<
+    GraphId,
+    Documents,
+    Relations,
+    Kind
+  >
+  /**
+   * Search only the nodes reached across one schema-declared relation.
+   *
+   * Canonical topology resolves the eligible document keys before the
+   * retrieval adapter applies semantic ranking and its candidate limit.
+   */
+  readonly searchWithin: GraphSearchWithin<
+    GraphId,
+    Documents,
+    Relations,
+    Kind
+  >
+  /** @deprecated Use `relatedNodes`; retained as a compatibility alias. */
   readonly neighbours: GraphNeighbours<
     GraphId,
     Documents,
@@ -664,7 +746,7 @@ type GraphRetrievalRelationServices<
   Routes extends readonly unknown[],
 > = Extract<Routes[number], RelationRetrievalRoute> extends never
   ? never
-  : GraphRelationStore
+  : GraphTopologyStore
 
 /** Reusable target-oriented retrieval compiled from graph schema routes. */
 export interface GraphRetrievalHandle<
@@ -720,6 +802,39 @@ export interface ReconcileDocumentGraphResult {
   readonly deletedRelations: number
 }
 
+/** One canonical topology node parsed through its graph document schema. */
+export interface DocumentGraphNode<
+  GraphId extends string,
+  Documents extends DocumentDefinitions,
+> {
+  readonly documentKey: DocumentKey
+  readonly reference: DocumentReference<GraphId, Documents>
+  readonly state: GraphNodeState
+}
+
+/** Bounded, deterministic page from the graph's canonical node catalog. */
+export interface DocumentGraphNodePage<
+  GraphId extends string,
+  Documents extends DocumentDefinitions,
+> {
+  readonly nodes: ReadonlyArray<DocumentGraphNode<GraphId, Documents>>
+  readonly next: Option.Option<DocumentKey>
+}
+
+/** Schema-aware constraints for one bounded canonical node page. */
+export interface DocumentGraphNodesOptions<
+  Documents extends DocumentDefinitions,
+> {
+  /** Omitted or empty includes every document kind registered by this graph. */
+  readonly include?: ReadonlyArray<DocumentKind<Documents>>
+  /** Defaults to both referenced and materialized nodes. */
+  readonly states?: ReadonlyArray<GraphNodeState>
+  /** Exclusive stable cursor returned by the preceding page. */
+  readonly after?: DocumentKey
+  /** Defaults to 100 and is bounded to 1,000. */
+  readonly limit?: number
+}
+
 /** Small application API compiled from one document graph schema. */
 export interface DocumentGraph<
   GraphId extends string,
@@ -733,6 +848,15 @@ export interface DocumentGraph<
   readonly document: <Kind extends DocumentKind<Documents>>(
     kind: Kind,
   ) => GraphDocumentHandle<GraphId, Documents, Relations, Kind>
+
+  /** Page through canonical D1/topology nodes without consulting retrieval. */
+  readonly nodes: (
+    options?: DocumentGraphNodesOptions<Documents>,
+  ) => Effect.Effect<
+    DocumentGraphNodePage<GraphId, Documents>,
+    InvalidGraphTraversal | DocumentGraphUnavailable,
+    GraphTopologyStore
+  >
 
   /** Compile reusable direct and one-relation routes into target retrieval. */
   readonly retrieval: <
@@ -784,7 +908,7 @@ export interface DocumentGraph<
   readonly reconcileIndex: () => Effect.Effect<
     ReconcileDocumentGraphResult,
     DocumentGraphUnavailable,
-    ProjectionIndexStore | GraphRelationStore
+    ProjectionIndexStore | GraphTopologyStore
   >
 
   /** Search every indexed projection in this graph unless scoped further. */
@@ -821,11 +945,18 @@ const failDocumentGraphOperation = (
 
 const failStoredOperation = (operation: DocumentGraphOperation) =>
   (error: {
-    readonly reason: "unavailable" | "invalid_stored_state"
+    readonly reason:
+      | "unavailable"
+      | "invalid_stored_state"
+      | "invalid_replacement"
+      | "capacity_exceeded"
+      | "publication_in_progress"
+      | "publication_in_doubt"
   }): Effect.Effect<never, DocumentGraphUnavailable> =>
     failDocumentGraphOperation(
       operation,
-      error.reason === "invalid_stored_state"
+      error.reason === "invalid_stored_state" ||
+          error.reason === "invalid_replacement"
         ? "invalid_stored_data"
         : "storage_failed",
     )(error)
@@ -836,7 +967,7 @@ const exposeIndexOperation = <A, R>(
     | ProjectDocumentError
     | InvalidGraphRelationOutput
     | IndexProjectedRevisionError
-    | GraphRelationStoreFailed,
+    | GraphTopologyStoreFailed,
     R
   >,
   attributes: DocumentGraphSpanAttributes,
@@ -852,7 +983,7 @@ const exposeIndexOperation = <A, R>(
         "invalid_adapter_output",
       ),
       ProjectionIndexStoreFailed: failStoredOperation("index"),
-      GraphRelationStoreFailed: failStoredOperation("index"),
+      GraphTopologyStoreFailed: failStoredOperation("index"),
     }),
     traceDocumentGraphOperation("index", attributes),
   )
@@ -864,29 +995,30 @@ const exposeSearchOperation = <A, R>(
     R
   >,
   attributes: DocumentGraphSpanAttributes,
+  operation: "search" | "search_within" = "search",
 ): Effect.Effect<A, SearchDocumentGraphError, R> =>
   effect.pipe(
     Effect.catchTags({
       EmbeddingProviderFailed: failDocumentGraphOperation(
-        "search",
+        operation,
         "embedding_failed",
       ),
       InvalidEmbeddingOutput: failDocumentGraphOperation(
-        "search",
+        operation,
         "invalid_adapter_output",
       ),
-      ProjectionSearchStoreFailed: failStoredOperation("search"),
-      ProjectionTextSearchStoreFailed: failStoredOperation("search"),
+      ProjectionSearchStoreFailed: failStoredOperation(operation),
+      ProjectionTextSearchStoreFailed: failStoredOperation(operation),
       InvalidSearchOutput: failDocumentGraphOperation(
-        "search",
+        operation,
         "invalid_stored_data",
       ),
       InvalidDocumentReference: failDocumentGraphOperation(
-        "search",
+        operation,
         "invalid_stored_data",
       ),
     }),
-    traceDocumentGraphOperation("search", attributes),
+    traceDocumentGraphOperation(operation, attributes),
   )
 
 const schemaSearchLimits = (input?: SchemaSearchOptions) => {
@@ -1082,6 +1214,46 @@ const bindDocumentGraph = <
       return parsedHit as AnyGraphSearchHit<GraphId, Documents>
     })
 
+  const searchSchemaSemantic = (
+    query: string,
+    options: DocumentGraphSearchOptions<Documents> | undefined,
+    target?: GraphSearchTarget,
+  ): Effect.Effect<
+    ReadonlyArray<AnyGraphSearchHit<GraphId, Documents>>,
+    SearchGraphError | InvalidDocumentReference,
+    EmbeddingProvider | ProjectionSearchStore
+  > =>
+    Effect.gen(function*() {
+      const strategy = yield* schemaSearchStrategy(options)
+      const scopeInput: GraphSearchScopeInput<
+        DocumentKind<Documents>,
+        GraphProjectionId<Documents>
+      > = {
+        include: options?.include,
+        exclude: options?.exclude,
+        includeProjections: options?.includeProjections,
+        excludeProjections: options?.excludeProjections,
+        target,
+      }
+      const searchScope = yield* parseRuntimeSearchOptions(() => ({
+        ...scope(scopeInput),
+        registered,
+      }))
+      yield* Effect.annotateCurrentSpan({
+        "document_graph.search.candidates": strategy.candidates,
+        "document_graph.search.limit": strategy.results,
+      })
+
+      const hits = yield* searchGraph({
+        query,
+        scope: searchScope,
+        strategy,
+      })
+      return yield* Effect.forEach(hits, (hit) =>
+        parseSearchHit(hit, "semantic"),
+      )
+    })
+
   const searchProjectionRuntime = (inputSearch: {
     readonly query: string
     readonly semanticQuery?: SemanticQueryPreparation | undefined
@@ -1169,7 +1341,7 @@ const bindDocumentGraph = <
     })
 
   const findRuntimeNeighbours = (inputNeighbour: {
-    readonly currentDocumentKey: DocumentKey
+    readonly currentDocumentKeys: ReadonlyArray<DocumentKey>
     readonly currentDocumentKind: string
     readonly relationId: string
     readonly direction: "outgoing" | "incoming"
@@ -1177,13 +1349,16 @@ const bindDocumentGraph = <
   }): Effect.Effect<
     ReadonlyArray<{
       readonly documentKey: DocumentKey
-      readonly reference: DocumentReference<GraphId, Documents>
+      readonly nodes: ReadonlyArray<{
+        readonly documentKey: DocumentKey
+        readonly reference: DocumentReference<GraphId, Documents>
+      }>
     }>,
     | InvalidDocumentIdentity
     | InvalidDocumentReference
-    | InvalidGraphNeighbourOutput
-    | GraphRelationStoreFailed,
-    GraphRelationStore
+    | InvalidGraphTopologyOutput
+    | GraphTopologyStoreFailed,
+    GraphTopologyStore
   > => findGraphNeighboursWorkflow({
     graph: input.id,
     relations,
@@ -1192,6 +1367,138 @@ const bindDocumentGraph = <
     referenceKind: (reference) => reference.kind,
     referenceKey: key,
   })
+
+  const listRuntimeNodes = (
+    options?: DocumentGraphNodesOptions<Documents>,
+  ): Effect.Effect<
+    DocumentGraphNodePage<GraphId, Documents>,
+    | InvalidDocumentIdentity
+    | InvalidDocumentReference
+    | InvalidGraphTopologyOutput
+    | GraphTopologyStoreFailed
+    | InvalidGraphTraversal,
+    GraphTopologyStore
+  > =>
+    Effect.gen(function*() {
+      const include = options?.include !== undefined && options.include.length > 0
+        ? [...options.include]
+        : [...compiled.documentsByKind.keys()]
+      const includedKinds = new Set<string>(include)
+      const states = [
+        ...(options?.states ?? ["Referenced", "Materialized"]),
+      ]
+      if (
+        include.some((kind) => !compiled.documentsByKind.has(kind)) ||
+        states.some((state) => !Schema.is(GraphNodeStateSchema)(state)) ||
+        (options?.after !== undefined &&
+          !Schema.is(DocumentKeySchema)(options.after))
+      ) {
+        return yield* Effect.fail(
+          new InvalidGraphTraversal({ reason: "invalid_options" }),
+        )
+      }
+      const limit = yield* Schema.decodeUnknownEffect(
+        GraphNodePageLimitSchema,
+      )(options?.limit ?? 100).pipe(
+        Effect.mapError(
+          () => new InvalidGraphTraversal({ reason: "invalid_limit" }),
+        ),
+      )
+      if (include.length === 0) {
+        return { nodes: [], next: Option.none() }
+      }
+      const store = yield* GraphTopologyStore
+      const page = yield* store.listNodes({
+        graph: input.id,
+        documentKinds: include,
+        states,
+        after: options?.after === undefined
+          ? Option.none()
+          : Option.some(options.after),
+        limit,
+      })
+      if (page.nodes.length > limit) {
+        return yield* Effect.fail(
+          new InvalidGraphTopologyOutput({
+            output: "nodes",
+            reason: "too_many",
+          }),
+        )
+      }
+
+      const parsed: Array<DocumentGraphNode<GraphId, Documents>> = []
+      const seen = new Set<DocumentKey>()
+      let previous = options?.after
+      for (const candidate of page.nodes) {
+        if (seen.has(candidate.documentKey)) {
+          return yield* Effect.fail(
+            new InvalidGraphTopologyOutput({
+              output: "nodes",
+              reason: "duplicate",
+            }),
+          )
+        }
+        if (
+          previous !== undefined &&
+          String(previous).localeCompare(String(candidate.documentKey)) >= 0
+        ) {
+          return yield* Effect.fail(
+            new InvalidGraphTopologyOutput({
+              output: "nodes",
+              reason: "not_ordered",
+            }),
+          )
+        }
+        if (
+          !Schema.is(GraphNodeStateSchema)(candidate.state) ||
+          (include.length > 0 &&
+            !includedKinds.has(candidate.reference.kind)) ||
+          (states.length > 0 && !states.includes(candidate.state))
+        ) {
+          return yield* Effect.fail(
+            new InvalidGraphTopologyOutput({
+              output: "nodes",
+              reason: "out_of_scope",
+            }),
+          )
+        }
+
+        const reference = yield* parseReference(candidate.reference)
+        const parsedKey = yield* key(reference)
+        if (parsedKey !== candidate.documentKey) {
+          return yield* Effect.fail(
+            new InvalidGraphTopologyOutput({
+              output: "nodes",
+              reason: "invalid_identity",
+            }),
+          )
+        }
+        seen.add(candidate.documentKey)
+        previous = candidate.documentKey
+        parsed.push({
+          documentKey: candidate.documentKey,
+          reference,
+          state: candidate.state,
+        })
+      }
+
+      if (Option.isSome(page.next)) {
+        const last = parsed.at(-1)
+        if (
+          last === undefined ||
+          page.next.value !== last.documentKey ||
+          parsed.length !== limit
+        ) {
+          return yield* Effect.fail(
+            new InvalidGraphTopologyOutput({
+              output: "nodes",
+              reason: "invalid_cursor",
+            }),
+          )
+        }
+      }
+      return { nodes: parsed, next: page.next }
+    })
 
   const document = <Kind extends DocumentKind<Documents>>(
     kind: Kind,
@@ -1343,6 +1650,140 @@ const bindDocumentGraph = <
       >>(handle)
     }
 
+    type RuntimeRelatedOptions = {
+      readonly via: keyof Relations & string
+      readonly direction?: "outgoing" | "incoming"
+      readonly limit?: number
+    }
+
+    const resolveRelatedNodes = (
+      id: DocumentId<Documents, Kind>,
+      options: RuntimeRelatedOptions,
+    ) => {
+      const relation = relations[options.via]
+      const direction = options.direction ?? "outgoing"
+      const currentKind =
+        direction === "outgoing" ? relation?.from : relation?.to
+      if (relation === undefined || currentKind !== kind) {
+        return Effect.die(
+          new Error(
+            `Unknown ${direction} relation ${options.via} for ${kind}`,
+          ),
+        )
+      }
+
+      return Effect.gen(function*() {
+        const limit = yield* Schema.decodeUnknownEffect(
+          GraphNeighbourLimitSchema,
+        )(options.limit ?? 100).pipe(
+          Effect.mapError(
+            () => new InvalidGraphTraversal({ reason: "invalid_limit" }),
+          ),
+        )
+        const currentDocumentKey = yield* key(ref(kind, id))
+        return yield* findRuntimeNeighbours({
+          currentDocumentKeys: [currentDocumentKey],
+          currentDocumentKind: kind,
+          relationId: options.via,
+          direction,
+          limit,
+        }).pipe(Effect.map((groups) => groups.flatMap((group) => group.nodes)))
+      })
+    }
+
+    const relatedNodes = (
+      operation: "related_nodes" | "neighbours",
+    ) => {
+      const implementation = (
+        id: DocumentId<Documents, Kind>,
+        options: RuntimeRelatedOptions,
+      ) => {
+        const direction = options.direction ?? "outgoing"
+        return resolveRelatedNodes(id, options).pipe(
+          Effect.map((related) => related.map((node) => node.reference)),
+          Effect.catchTags({
+            GraphTopologyStoreFailed: failStoredOperation(operation),
+            InvalidDocumentReference: failDocumentGraphOperation(
+              operation,
+              "invalid_stored_data",
+            ),
+            InvalidGraphTopologyOutput: failDocumentGraphOperation(
+              operation,
+              "invalid_stored_data",
+            ),
+          }),
+          traceDocumentGraphOperation(operation, {
+            "document_graph.graph": input.id,
+            "document_graph.document_kind": kind,
+            "document_graph.relation": options.via,
+            "document_graph.related_nodes.direction": direction,
+            "document_graph.related_nodes.limit": options.limit ?? 100,
+          }),
+        )
+      }
+      return EffectFunction.cast<
+        typeof implementation,
+        GraphNeighbours<GraphId, Documents, Relations, Kind>
+      >(implementation)
+    }
+
+    const searchWithinImplementation = (
+      id: DocumentId<Documents, Kind>,
+      query: string,
+      options: DocumentGraphSearchWithinOptions<Documents> &
+        RuntimeRelatedOptions,
+    ) => {
+      const direction = options.direction ?? "outgoing"
+      return Effect.gen(function*() {
+        const maximumDocuments = yield* Schema.decodeUnknownEffect(
+          GraphNeighbourLimitSchema,
+        )(options.maximumDocuments).pipe(
+          Effect.mapError(
+            () => new InvalidGraphTraversal({ reason: "invalid_limit" }),
+          ),
+        )
+        const relatedSelection: RuntimeRelatedOptions = {
+          via: options.via,
+          direction,
+          limit: maximumDocuments,
+        }
+        const related = yield* resolveRelatedNodes(id, relatedSelection).pipe(
+          Effect.catchTags({
+            GraphTopologyStoreFailed: failStoredOperation("search_within"),
+            InvalidDocumentReference: failDocumentGraphOperation(
+              "search_within",
+              "invalid_stored_data",
+            ),
+            InvalidGraphTopologyOutput: failDocumentGraphOperation(
+              "search_within",
+              "invalid_stored_data",
+            ),
+          }),
+        )
+        const relatedKeys = related.map((node) => node.documentKey)
+        const target = EffectArray.isReadonlyArrayNonEmpty(relatedKeys)
+          ? documentKeys(relatedKeys)
+          : noDocuments()
+        return yield* exposeSearchOperation(
+          searchSchemaSemantic(query, options.search, target),
+          {
+            "document_graph.graph": input.id,
+            "document_graph.document_kind": kind,
+            "document_graph.relation": options.via,
+            "document_graph.search_within.direction": direction,
+            "document_graph.search_within.maximum_documents":
+              maximumDocuments,
+            "document_graph.search.strategy": "semantic",
+          },
+          "search_within",
+        )
+      })
+    }
+    const searchWithin = EffectFunction.cast<
+      typeof searchWithinImplementation,
+      GraphSearchWithin<GraphId, Documents, Relations, Kind>
+    >(searchWithinImplementation)
+
     return {
       kind,
       ref: (id) => ref(kind, id),
@@ -1374,74 +1815,18 @@ const bindDocumentGraph = <
         }).pipe(
           Effect.catchTags({
             ProjectionIndexStoreFailed: failStoredOperation("remove"),
-            GraphRelationStoreFailed: failStoredOperation("remove"),
+            GraphTopologyStoreFailed: failStoredOperation("remove"),
           }),
           traceDocumentGraphOperation("remove", {
             "document_graph.graph": input.id,
             "document_graph.document_kind": kind,
           }),
         ),
-      // SAFETY: The implementation validates the selected relation against
-      // the current node and checks every parsed reference against the
-      // opposite kind before exposing its direction-specific overload.
-      neighbours: EffectFunction.cast((
-        id: DocumentId<Documents, Kind>,
-        options: {
-          readonly via: keyof Relations & string
-          readonly direction?: "outgoing" | "incoming"
-          readonly limit?: number
-        },
-      ) => {
-        const relation = relations[options.via]
-        const direction = options.direction ?? "outgoing"
-        const currentKind =
-          direction === "outgoing" ? relation?.from : relation?.to
-        if (relation === undefined || currentKind !== kind) {
-          return Effect.die(
-            new Error(
-              `Unknown ${direction} relation ${options.via} for ${kind}`,
-            ),
-          )
-        }
-
-        return Effect.gen(function*() {
-          const limit = yield* Schema.decodeUnknownEffect(
-            GraphNeighbourLimitSchema,
-          )(options.limit ?? 100).pipe(
-            Effect.mapError(
-              () => new InvalidGraphTraversal({ reason: "invalid_limit" }),
-            ),
-          )
-          const currentDocumentKey = yield* key(ref(kind, id))
-          const neighbours = yield* findRuntimeNeighbours({
-            currentDocumentKey,
-            currentDocumentKind: kind,
-            relationId: options.via,
-            direction,
-            limit,
-          })
-          return neighbours.map((neighbour) => neighbour.reference)
-        }).pipe(
-          Effect.catchTags({
-            GraphRelationStoreFailed: failStoredOperation("neighbours"),
-            InvalidDocumentReference: failDocumentGraphOperation(
-              "neighbours",
-              "invalid_stored_data",
-            ),
-            InvalidGraphNeighbourOutput: failDocumentGraphOperation(
-              "neighbours",
-              "invalid_stored_data",
-            ),
-          }),
-          traceDocumentGraphOperation("neighbours", {
-            "document_graph.graph": input.id,
-            "document_graph.document_kind": kind,
-            "document_graph.relation": options.via,
-            "document_graph.neighbours.direction": direction,
-            "document_graph.neighbours.limit": options.limit ?? 100,
-          }),
-        )
-      }),
+      // SAFETY: Each implementation validates the selected relation against
+      // the current kind and validates every adapter-returned reference.
+      relatedNodes: relatedNodes("related_nodes"),
+      searchWithin,
+      neighbours: relatedNodes("neighbours"),
     }
   }
 
@@ -1633,7 +2018,7 @@ const bindDocumentGraph = <
       | EmbeddingProvider
       | ProjectionSearchStore
       | ProjectionTextSearchStore
-      | GraphRelationStore
+      | GraphTopologyStore
     > =>
       Effect.forEach(
         compiledRoutes,
@@ -1676,47 +2061,37 @@ const bindDocumentGraph = <
             for (const hit of hits) {
               uniqueSources.set(hit.documentKey, hit)
             }
-            const neighbourEntries = yield* Effect.forEach(
-              uniqueSources.values(),
-              (hit) =>
-                findRuntimeNeighbours({
-                  currentDocumentKey: hit.documentKey,
-                  currentDocumentKind: route.sourceKind,
-                  relationId: route.relation,
-                  direction: "outgoing",
-                  limit: route.neighboursPerSource,
-                }).pipe(
-                  Effect.map((neighbours) => [
-                    hit.documentKey,
-                    neighbours.map((neighbour) => ({
-                      key: neighbour.documentKey,
-                      // SAFETY: Runtime relation validation fixed this route's
-                      // target kind to the retrieval target.
-                      reference: neighbour.reference as TargetReference,
-                    })),
-                  ] as const),
-                  Effect.catchTags({
-                    GraphRelationStoreFailed:
-                      failStoredOperation("search"),
-                    InvalidDocumentIdentity: failDocumentGraphOperation(
-                      "search",
-                      "invalid_stored_data",
-                    ),
-                    InvalidDocumentReference: failDocumentGraphOperation(
-                      "search",
-                      "invalid_stored_data",
-                    ),
-                    InvalidGraphNeighbourOutput:
-                      failDocumentGraphOperation(
-                        "search",
-                        "invalid_stored_data",
-                      ),
-                  }),
-                ),
-              {
-                concurrency: GraphNeighbourExpansionConcurrencyPerRoute,
-              },
+            const sourceKeys = [...uniqueSources.keys()]
+            const batches: Array<ReadonlyArray<DocumentKey>> = []
+            for (let offset = 0; offset < sourceKeys.length; offset += GraphNeighbourBatchSize) {
+              batches.push(sourceKeys.slice(offset, offset + GraphNeighbourBatchSize))
+            }
+            const neighbourBatches = yield* Effect.forEach(batches, (documentKeys) =>
+              findRuntimeNeighbours({
+                currentDocumentKeys: documentKeys,
+                currentDocumentKind: route.sourceKind,
+                relationId: route.relation,
+                direction: "outgoing",
+                limit: route.neighboursPerSource,
+              }).pipe(
+                Effect.map((groups) => groups.map((group) => [
+                  group.documentKey,
+                  group.nodes.map((neighbour) => ({
+                    key: neighbour.documentKey,
+                    // SAFETY: Runtime relation validation fixed this route's
+                    // target kind to the retrieval target.
+                    reference: neighbour.reference as TargetReference,
+                  })),
+                ] as const)),
+                Effect.catchTags({
+                  GraphTopologyStoreFailed: failStoredOperation("search"),
+                  InvalidDocumentIdentity: failDocumentGraphOperation("search", "invalid_stored_data"),
+                  InvalidDocumentReference: failDocumentGraphOperation("search", "invalid_stored_data"),
+                  InvalidGraphTopologyOutput: failDocumentGraphOperation("search", "invalid_stored_data"),
+                }),
+              )
             )
+            const neighbourEntries = neighbourBatches.flat()
             const neighboursBySource = new Map(neighbourEntries)
             return {
               route,
@@ -1974,6 +2349,28 @@ const bindDocumentGraph = <
     id: input.id,
     manifest: compiled.manifest,
     document,
+    nodes: (options) =>
+      listRuntimeNodes(options).pipe(
+        Effect.catchTags({
+          GraphTopologyStoreFailed: failStoredOperation("nodes"),
+          InvalidDocumentIdentity: failDocumentGraphOperation(
+            "nodes",
+            "invalid_stored_data",
+          ),
+          InvalidDocumentReference: failDocumentGraphOperation(
+            "nodes",
+            "invalid_stored_data",
+          ),
+          InvalidGraphTopologyOutput: failDocumentGraphOperation(
+            "nodes",
+            "invalid_stored_data",
+          ),
+        }),
+        traceDocumentGraphOperation("nodes", {
+          "document_graph.graph": input.id,
+          "document_graph.nodes.limit": options?.limit ?? 100,
+        }),
+      ),
     retrieval,
     parseReference,
     reconcileIndex: () =>
@@ -1985,7 +2382,7 @@ const bindDocumentGraph = <
         Effect.catchTags({
           ProjectionIndexStoreFailed:
             failStoredOperation("reconcile_index"),
-          GraphRelationStoreFailed:
+          GraphTopologyStoreFailed:
             failStoredOperation("reconcile_index"),
         }),
         traceDocumentGraphOperation("reconcile_index", {
@@ -1994,35 +2391,7 @@ const bindDocumentGraph = <
       ),
     search: (query, options) =>
       exposeSearchOperation(
-        Effect.gen(function*() {
-          const strategy = yield* schemaSearchStrategy(options)
-          const scopeInput: GraphSearchScopeInput<
-            DocumentKind<Documents>,
-            GraphProjectionId<Documents>
-          > = {
-            include: options?.include,
-            exclude: options?.exclude,
-            includeProjections: options?.includeProjections,
-            excludeProjections: options?.excludeProjections,
-          }
-          const searchScope = yield* parseRuntimeSearchOptions(() => ({
-            ...scope(scopeInput),
-            registered,
-          }))
-          yield* Effect.annotateCurrentSpan({
-            "document_graph.search.candidates": strategy.candidates,
-            "document_graph.search.limit": strategy.results,
-          })
-
-          const hits = yield* searchGraph({
-            query,
-            scope: searchScope,
-            strategy,
-          })
-          return yield* Effect.forEach(hits, (hit) =>
-            parseSearchHit(hit, "semantic"),
-          )
-        }),
+        searchSchemaSemantic(query, options),
         {
           "document_graph.graph": input.id,
           "document_graph.search.strategy": "semantic",

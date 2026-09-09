@@ -7,8 +7,10 @@
     "paths": {
       "@popcomputer/document-graph": ["./src/index.ts"],
       "@popcomputer/document-graph/adapter": ["./src/adapter.ts"],
+      "@popcomputer/document-graph/d1": ["./src/d1.ts"],
       "@popcomputer/document-graph/in-memory": ["./src/in-memory.ts"],
-      "@popcomputer/document-graph/postgres": ["./src/postgres.ts"]
+      "@popcomputer/document-graph/postgres": ["./src/postgres.ts"],
+      "@popcomputer/document-graph/turbopuffer": ["./src/turbopuffer.ts"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts", "examples/**/*.ts"]

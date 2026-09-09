@@ -31,9 +31,9 @@ import {
   type TextSearchPolicy,
 } from "../document/text-search-policy.js"
 import {
-  verifyGraphRelationStoreConformance,
-  type GraphRelationStoreConformanceReport,
-} from "./graph-relation-conformance.js"
+  verifyGraphTopologyStoreConformance,
+  type GraphTopologyStoreConformanceReport,
+} from "./graph-topology-conformance.js"
 import {
   verifyProjectionIndexStoreConformance,
   type ProjectionIndexStoreConformanceReport,
@@ -50,14 +50,14 @@ export {
 } from "./projection-index-conformance.js"
 
 export {
-  GraphRelationStoreConformanceLawSchema,
-  GraphRelationStoreConformanceViolation,
-  makeGraphRelationStoreConformanceFixture,
-  verifyGraphRelationStoreConformance,
-  type GraphRelationStoreConformanceFixture,
-  type GraphRelationStoreConformanceLaw,
-  type GraphRelationStoreConformanceReport,
-} from "./graph-relation-conformance.js"
+  GraphTopologyStoreConformanceLawSchema,
+  GraphTopologyStoreConformanceViolation,
+  makeGraphTopologyStoreConformanceFixture,
+  verifyGraphTopologyStoreConformance,
+  type GraphTopologyStoreConformanceFixture,
+  type GraphTopologyStoreConformanceLaw,
+  type GraphTopologyStoreConformanceReport,
+} from "./graph-topology-conformance.js"
 
 /** Retrieval laws checked against every candidate-store adapter. */
 export const SearchStoreConformanceLawSchema = Schema.Literals([
@@ -191,6 +191,7 @@ const makeReplacement = (input: {
       id: input.id,
     },
     projectionVersion: ProjectionVersion,
+    textPolicy,
     revisionHash: Schema.decodeSync(ProjectionRevisionHashSchema)(
       input.revisionIdentity.repeat(64),
     ),
@@ -588,7 +589,7 @@ export const verifySearchStoreConformance = () =>
 /** Evidence that one cohesive storage adapter passed every stable suite. */
 export interface DocumentGraphStorageConformanceReport {
   readonly projectionIndex: ProjectionIndexStoreConformanceReport
-  readonly graphRelations: GraphRelationStoreConformanceReport
+  readonly graphTopology: GraphTopologyStoreConformanceReport
   readonly retrieval: ReadonlyArray<SearchStoreConformanceReport>
 }
 
@@ -602,9 +603,9 @@ export const verifyDocumentGraphStorageConformance = () =>
   Effect.gen(function*() {
     const projectionIndex =
       yield* verifyProjectionIndexStoreConformance()
-    const graphRelations =
-      yield* verifyGraphRelationStoreConformance()
+    const graphTopology =
+      yield* verifyGraphTopologyStoreConformance()
     const retrieval = yield* verifySearchStoreConformance()
 
-    return { projectionIndex, graphRelations, retrieval }
+    return { projectionIndex, graphTopology, retrieval }
   })

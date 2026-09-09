@@ -11,10 +11,10 @@ import {
   ProjectionIndexStore,
 } from "../indexing/projection-index.js"
 import {
-  GraphRelationStore,
   projectOutgoingGraphRelationsForInstance,
   type GraphRelationDefinitions,
 } from "./graph-relation.js"
+import { GraphTopologyStore } from "./graph-topology.js"
 
 export interface IndexGraphDocumentWorkflowInput {
   readonly graph: string
@@ -63,8 +63,8 @@ export const indexGraphDocumentWorkflow = Effect.fn(
         })),
       ),
   )
-  const relationStore = yield* GraphRelationStore
-  const relations = yield* relationStore.replaceOutgoing(outgoing)
+  const topologyStore = yield* GraphTopologyStore
+  const relations = yield* topologyStore.replaceDocumentTopology(outgoing)
   return { projections, relations }
 })
 
@@ -92,13 +92,13 @@ export const removeGraphDocumentWorkflow = Effect.fn(
     }),
     { deletedRevisions: 0, deletedChunks: 0 },
   )
-  const relationStore = yield* GraphRelationStore
-  const relationDeletion = yield* relationStore.deleteNode({
+  const topologyStore = yield* GraphTopologyStore
+  const topologyDeletion = yield* topologyStore.deleteNode({
     graph: input.graph,
     documentKey: input.documentKey,
   })
   return {
     ...projectionDeletion,
-    deletedRelations: relationDeletion.deleted,
+    deletedRelations: topologyDeletion.deletedRelations,
   }
 })

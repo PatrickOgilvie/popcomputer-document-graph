@@ -190,13 +190,13 @@ export const identifyWork = (id: Schema.Schema.Type<typeof WorkId>) =>
 /** Find Agency references directly related to one Work graph node. */
 export const findWorkAgencies = (
   id: Schema.Schema.Type<typeof WorkId>,
-) => WorkNode.neighbours(id, { via: "deliveredBy" })
+) => WorkNode.relatedNodes(id, { via: "deliveredBy" })
 
 /** Find Work references that point to one Agency through deliveredBy. */
 export const findAgencyWork = (
   id: Schema.Schema.Type<typeof AgencyId>,
 ) =>
-  AgencyNode.neighbours(id, {
+  AgencyNode.relatedNodes(id, {
     via: "deliveredBy",
     direction: "incoming",
   })

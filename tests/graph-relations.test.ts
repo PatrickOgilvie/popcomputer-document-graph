@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Effect, Layer, Option, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -9,8 +9,8 @@ import {
 } from "../src/index.js"
 import { inMemoryDocumentGraph } from "../src/in-memory.js"
 import {
-  GraphRelationStore,
-  type GraphRelationStoreService,
+  GraphTopologyStore,
+  type GraphTopologyStoreService,
 } from "../src/adapter.js"
 
 const AgencyId = Schema.String.check(Schema.isUUID()).pipe(
@@ -205,7 +205,8 @@ describe("graph relations", () => {
     }
   })
 
-  test("rejects duplicate neighbours returned by an adapter", async () => {
+  for (const malformedOutput of ["duplicate", "wrong_source", "missing_group"] as const) {
+  test(`rejects ${malformedOutput} neighbours returned by an adapter`, async () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const documentKey = yield* AgencyNode.key(firstAgencyId)
@@ -216,19 +217,34 @@ describe("graph relations", () => {
             kind: "Agency",
             id: firstAgencyId,
           },
+          state: "Referenced" as const,
         }
-        const malformed: GraphRelationStoreService = {
-          replaceOutgoing: () =>
+        const malformed: GraphTopologyStoreService = {
+          replaceDocumentTopology: () =>
             Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
-          deleteNode: () => Effect.succeed({ deleted: 0 }),
-          pruneRelations: () => Effect.succeed({ deleted: 0 }),
-          findOutgoing: () => Effect.succeed([candidate, candidate]),
-          findIncoming: () => Effect.succeed([]),
+          deleteNode: () =>
+            Effect.succeed({
+              deletedNodes: 0,
+              deletedRelations: 0,
+              deletedReferencedNodes: 0,
+            }),
+          pruneTopology: () =>
+            Effect.succeed({
+              deletedRelations: 0,
+              deletedReferencedNodes: 0,
+            }),
+          listNodes: () =>
+            Effect.succeed({ nodes: [], next: Option.none() }),
+          findRelatedNodes: (request) =>
+            Effect.succeed(malformedOutput === "missing_group" ? [] : request.documentKeys.map((documentKey) => ({
+              documentKey: malformedOutput === "wrong_source" ? candidate.documentKey : documentKey,
+              nodes: malformedOutput === "duplicate" ? [candidate, candidate] : [candidate],
+            }))),
         }
         return yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         }).pipe(
-          Effect.provide(Layer.succeed(GraphRelationStore, malformed)),
+          Effect.provide(Layer.succeed(GraphTopologyStore, malformed)),
           Effect.result,
         )
       }),
@@ -243,6 +259,8 @@ describe("graph relations", () => {
       }
     }
   })
+
+  }
 
   test("deleting a target removes incoming edges", async () => {
     const result = await Effect.runPromise(
@@ -263,6 +281,31 @@ describe("graph relations", () => {
     expect(result.neighbours).toEqual([
       { graph: graph.id, kind: "Agency", id: secondAgencyId },
     ])
+  })
+
+  test("deleting a materialized source collects its orphaned referenced targets", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function*() {
+        yield* WorkNode.index({
+          id: workId,
+          agencyIds: [firstAgencyId],
+        })
+        const before = yield* graph.nodes({ states: ["Referenced"] })
+        const removed = yield* WorkNode.remove(workId)
+        const after = yield* graph.nodes()
+        return { before, removed, after }
+      }).pipe(Effect.provide(makeLive())),
+    )
+
+    expect(result.before.nodes.map((node) => node.reference)).toEqual([
+      { graph: graph.id, kind: "Agency", id: firstAgencyId },
+    ])
+    expect(result.removed).toEqual({
+      deletedRevisions: 0,
+      deletedChunks: 0,
+      deletedRelations: 1,
+    })
+    expect(result.after.nodes).toEqual([])
   })
 
   test("reconciliation removes relations absent from the current schema", async () => {

@@ -10,16 +10,16 @@ import {
   type ProjectionIndexStoreService,
 } from "../indexing/projection-index.js"
 import {
-  GraphRelationStore,
-  type GraphRelationStoreService,
-} from "../graph/graph-relation.js"
+  GraphTopologyStore,
+  type GraphTopologyStoreService,
+} from "../graph/graph-topology.js"
 
 /** Cohesive storage implementation supporting both indexing and retrieval. */
 export interface DocumentGraphStorageService
   extends ProjectionIndexStoreService,
     ProjectionSearchStoreService,
     ProjectionTextSearchStoreService,
-    GraphRelationStoreService {}
+    GraphTopologyStoreService {}
 
 /**
  * Provide one storage implementation through the independent index and search
@@ -31,11 +31,11 @@ export const makeDocumentGraphStorage = (
   | ProjectionIndexStore
   | ProjectionSearchStore
   | ProjectionTextSearchStore
-  | GraphRelationStore
+  | GraphTopologyStore
 > =>
   Layer.mergeAll(
     Layer.succeed(ProjectionIndexStore, storage),
     Layer.succeed(ProjectionSearchStore, storage),
     Layer.succeed(ProjectionTextSearchStore, storage),
-    Layer.succeed(GraphRelationStore, storage),
+    Layer.succeed(GraphTopologyStore, storage),
   )

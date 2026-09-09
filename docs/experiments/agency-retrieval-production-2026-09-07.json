@@ -1,0 +1,261 @@
+{
+  "fixture": {
+    "agencies": 1000,
+    "caseStudies": 9000,
+    "documents": 10000,
+    "relations": 9270,
+    "dimensions": 1024,
+    "candidatesPerRoutePerChannel": 50,
+    "neighboursPerSource": 2,
+    "results": 10
+  },
+  "runtime": {
+    "node": "v22.22.2",
+    "postgres": "17.8 (Homebrew)",
+    "pgvector": "0.8.6",
+    "jit": false
+  },
+  "measuredRuns": 5,
+  "warmupRuns": 1,
+  "includesEmbeddingApiLatency": false,
+  "includesCapabilityDiscovery": true,
+  "serializedConnection": true,
+  "comparisons": [
+    {
+      "strategy": "semantic",
+      "variant": "baseline",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": true
+    },
+    {
+      "strategy": "semantic",
+      "variant": "float64",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": true
+    },
+    {
+      "strategy": "semantic",
+      "variant": "auto",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": false
+    },
+    {
+      "strategy": "text",
+      "variant": "baseline",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": true
+    },
+    {
+      "strategy": "text",
+      "variant": "float64",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": true
+    },
+    {
+      "strategy": "text",
+      "variant": "auto",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": true
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "baseline",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": true
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "float64",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": true
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "auto",
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": false
+    }
+  ],
+  "measurements": [
+    {
+      "strategy": "semantic",
+      "variant": "baseline",
+      "medianMilliseconds": 1095.4225000000006,
+      "samplesMilliseconds": [
+        1230.6308329999993,
+        1095.4225000000006,
+        1053.8889159999999,
+        1062.784208000001,
+        1111.6501669999998
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "float64",
+      "medianMilliseconds": 944.1173330000001,
+      "samplesMilliseconds": [
+        948.9295419999999,
+        997.473,
+        944.1173330000001,
+        943.9249159999981,
+        943.1257500000029
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "auto",
+      "medianMilliseconds": 97.49908299999879,
+      "samplesMilliseconds": [
+        98.32162499999959,
+        98.691417,
+        97.49908299999879,
+        95.35641600000235,
+        94.41341700000339
+      ],
+      "statementCounts": [
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "baseline",
+      "medianMilliseconds": 24.78150000000096,
+      "samplesMilliseconds": [
+        24.78150000000096,
+        25.270166999998764,
+        23.690416000001278,
+        29.832041999998182,
+        24.49029199999859
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "float64",
+      "medianMilliseconds": 11.135707999997976,
+      "samplesMilliseconds": [
+        10.805625000000873,
+        11.56512500000099,
+        10.982583000000886,
+        11.667292000001908,
+        11.135707999997976
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "auto",
+      "medianMilliseconds": 11.114416000000347,
+      "samplesMilliseconds": [
+        10.657250000000204,
+        11.132582999998704,
+        11.211624999999913,
+        10.805250000001251,
+        11.114416000000347
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "baseline",
+      "medianMilliseconds": 1074.9051670000008,
+      "samplesMilliseconds": [
+        1072.5816660000019,
+        1074.9051670000008,
+        1073.099333000002,
+        1078.8943340000005,
+        1080.7652500000004
+      ],
+      "statementCounts": [
+        104,
+        104,
+        104,
+        104,
+        104
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "float64",
+      "medianMilliseconds": 953.3623750000006,
+      "samplesMilliseconds": [
+        953.6430409999994,
+        952.0751249999994,
+        953.3623750000006,
+        949.4014590000006,
+        955.6988340000025
+      ],
+      "statementCounts": [
+        5,
+        5,
+        5,
+        5,
+        5
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "auto",
+      "medianMilliseconds": 106.60054200000013,
+      "samplesMilliseconds": [
+        105.91995799999859,
+        107.50708299999678,
+        106.60054200000013,
+        104.95195800000147,
+        109.0616250000021
+      ],
+      "statementCounts": [
+        6,
+        6,
+        6,
+        6,
+        6
+      ]
+    }
+  ]
+}

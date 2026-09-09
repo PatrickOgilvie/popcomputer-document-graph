@@ -13,6 +13,7 @@ import {
   ProjectionRevisionHashSchema,
   type ChunkId,
   type ContentHash,
+  type DocumentKey,
 } from "../../document/document-identity.js"
 import {
   ProjectionSearchStoreFailed,
@@ -36,6 +37,7 @@ import {
   type IndexRevisionToken,
   type ProjectionRevisionLookup,
   type ProjectionIndexCommit,
+  type PruneGraphIndex,
   type ReplaceProjectedRevision,
 } from "../../indexing/projection-index.js"
 import {
@@ -46,17 +48,24 @@ import {
 } from "../../indexing/embedding-provider.js"
 import {
   countGraphRelationReplacement,
-  GraphRelationStoreFailed,
   makeGraphRelationEdgeIdentity,
   planOutgoingGraphRelationReplacement,
   type GraphRelationCommit,
-  type GraphRelationDeletion,
-  type GraphRelationPrune,
-  type PruneGraphRelations,
   type ReplaceOutgoingGraphRelations,
-  type StoredGraphNeighbour,
 } from "../../graph/graph-relation.js"
-import { Effect, Option, Result, Schema, SchemaIssue } from "effect"
+import {
+  GraphNodeStateSchema,
+  GraphTopologyStoreFailed,
+  type FindRelatedGraphNodes,
+  type RelatedGraphNodeSet,
+  type GraphNodePage,
+  type GraphTopologyDeletion,
+  type GraphTopologyPrune,
+  type ListGraphNodes,
+  type PruneGraphTopology,
+  type StoredGraphNode,
+} from "../../graph/graph-topology.js"
+import { Cache, Effect, Exit, Layer, Option, Result, Schema, SchemaIssue } from "effect"
 import {
   connectionFor,
   queryRows,
@@ -176,11 +185,16 @@ const GraphEdgeIdentityRowSchema = Schema.Struct({
   target_document_key: DocumentKeySchema,
 })
 
-const GraphNeighbourRowSchema = Schema.Struct({
+const GraphNodeRowSchema = Schema.Struct({
   document_key: DocumentKeySchema,
   graph_id: Schema.String,
   document_kind: Schema.String,
   encoded_document_id: JsonValueSchema,
+  node_state: GraphNodeStateSchema,
+})
+
+const GraphNodeKeyRowSchema = Schema.Struct({
+  document_key: DocumentKeySchema,
 })
 
 const DeletedGraphEdgeCountRowSchema = Schema.Struct({
@@ -198,7 +212,7 @@ type SearchCandidateRow = Schema.Codec.Encoded<typeof SearchCandidateRowSchema>
 type GraphEdgeIdentityRow = Schema.Codec.Encoded<
   typeof GraphEdgeIdentityRowSchema
 >
-type GraphNeighbourRow = Schema.Codec.Encoded<typeof GraphNeighbourRowSchema>
+type GraphNodeRow = Schema.Codec.Encoded<typeof GraphNodeRowSchema>
 type DeletedGraphEdgeCountRow = Schema.Codec.Encoded<
   typeof DeletedGraphEdgeCountRowSchema
 >
@@ -208,12 +222,13 @@ interface DeletionCounts {
   readonly deletedChunks: number
 }
 
-const quoteIdentifier = (identifier: string): string => `"${identifier}"`
+const quoteIdentifier = (identifier: string): string => `"${identifier.replaceAll('"', '""')}"`
 
 interface PostgresTables {
   readonly revisions: string
   readonly chunks: string
   readonly relations: string
+  readonly nodes: string
   readonly locks: string
 }
 
@@ -339,11 +354,11 @@ const textSearchFailure = (
     cause,
   })
 
-const relationFailure = (
-  operation: GraphRelationStoreFailed["operation"],
+const topologyFailure = (
+  operation: GraphTopologyStoreFailed["operation"],
   cause: unknown,
-): GraphRelationStoreFailed =>
-  new GraphRelationStoreFailed({
+): GraphTopologyStoreFailed =>
+  new GraphTopologyStoreFailed({
     operation,
     reason: cause instanceof InvalidStoredState
       ? "invalid_stored_state"
@@ -694,13 +709,7 @@ const deleteRevisionInTransaction = async (
 }
 
 const staleGraphSql = (
-  input: {
-    readonly graph: string
-    readonly registered: ReadonlyArray<{
-      readonly documentKind: string
-      readonly projection: string
-    }>
-  },
+  input: PruneGraphIndex,
   values: Array<unknown>,
 ): string => {
   values.push(input.graph)
@@ -713,26 +722,24 @@ const staleGraphSql = (
   const documentKinds = `$${values.length}`
   values.push(input.registered.map((target) => target.projection))
   const projections = `$${values.length}`
+  values.push(input.registered.map((target) => target.projectionVersion ?? null))
+  const versions = `$${values.length}`
   return `r.graph_id = ${graph}
     AND NOT EXISTS (
       SELECT 1
-      FROM unnest(${documentKinds}::text[], ${projections}::text[])
-        AS registered(document_kind, projection_id)
+      FROM unnest(${documentKinds}::text[], ${projections}::text[], ${versions}::text[])
+        AS registered(document_kind, projection_id, projection_version)
       WHERE registered.document_kind = r.document_kind
         AND registered.projection_id = r.projection_id
+        AND (registered.projection_version IS NULL
+          OR registered.projection_version = r.projection_version)
     )`
 }
 
 const pruneGraphInTransaction = async (
   client: TransactionClient,
   tables: { readonly revisions: string; readonly chunks: string },
-  input: {
-    readonly graph: string
-    readonly registered: ReadonlyArray<{
-      readonly documentKind: string
-      readonly projection: string
-    }>
-  },
+  input: PruneGraphIndex,
 ): Promise<{ readonly deletedRevisions: number; readonly deletedChunks: number }> => {
   const values: Array<unknown> = []
   const stale = staleGraphSql(input, values)
@@ -795,6 +802,18 @@ const appendScopeSql = (
   values.push(scope.graph)
   filters.push(`r.graph_id = $${values.length}`)
 
+  switch (scope.target._tag) {
+    case "AllDocuments":
+      break
+    case "NoDocuments":
+      filters.push("FALSE")
+      break
+    case "DocumentKeys":
+      values.push([...scope.target.documentKeys])
+      filters.push(`r.document_key = ANY($${values.length}::char(64)[])`)
+      break
+  }
+
   if (scope.registered !== undefined) {
     if (scope.registered.length === 0) {
       filters.push("FALSE")
@@ -803,13 +822,19 @@ const appendScopeSql = (
       const documentKinds = `$${values.length}`
       values.push(scope.registered.map((target) => target.projection))
       const projections = `$${values.length}`
+      values.push(scope.registered.map((target) => target.projectionVersion ?? null))
+      const versions = `$${values.length}`
       filters.push(
         `EXISTS (
           SELECT 1
-          FROM unnest(${documentKinds}::text[], ${projections}::text[])
-            AS registered(document_kind, projection_id)
+          FROM unnest(
+            ${documentKinds}::text[], ${projections}::text[],
+            ${versions}::text[]
+          ) AS registered(document_kind, projection_id, projection_version)
           WHERE registered.document_kind = r.document_kind
             AND registered.projection_id = r.projection_id
+            AND (registered.projection_version IS NULL
+              OR registered.projection_version = r.projection_version)
         )`,
       )
     }
@@ -861,11 +886,60 @@ const projectSearchCandidate = (
   }
 }
 
+// pgvector accumulates products in float32. These conservative bounds keep
+// squared norms finite and nonzero, including at its 16,000-dimension limit.
+// The same bounds are persisted for stored vectors by migration 0004.
+const nativeQueryEligible = (vector: ReadonlyArray<number>): boolean => {
+  if (vector.length === 0 || vector.length > 16_000) return false
+  let maximum = 0
+  for (const component of vector) {
+    if (!Number.isFinite(component)) return false
+    maximum = Math.max(maximum, Math.abs(component))
+  }
+  return maximum >= 1e-18 && maximum <= 1e15
+}
+
+const PgvectorNamespaceRowSchema = Schema.Struct({ namespace: Schema.String })
+
+const discoverPgvectorNamespace = (connection: Queryable) => Effect.tryPromise({
+  try: async () => {
+    const rows = await queryRows<Schema.Codec.Encoded<typeof PgvectorNamespaceRowSchema>>(
+      connection,
+      `SELECT namespace.nspname AS namespace
+       FROM pg_catalog.pg_extension AS extension
+       INNER JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = extension.extnamespace
+       INNER JOIN pg_catalog.pg_type AS vector_type
+         ON vector_type.typnamespace = namespace.oid AND vector_type.typname = 'vector'
+       INNER JOIN pg_catalog.pg_proc AS cosine
+         ON cosine.pronamespace = namespace.oid AND cosine.proname = 'cosine_distance'
+         AND cosine.pronargs = 2
+         AND cosine.proargtypes[0] = vector_type.oid AND cosine.proargtypes[1] = vector_type.oid
+       INNER JOIN pg_catalog.pg_cast AS vector_cast
+         ON vector_cast.casttarget = vector_type.oid
+         AND vector_cast.castsource = 'pg_catalog.float8[]'::pg_catalog.regtype
+       WHERE extension.extname = 'vector'
+         AND pg_catalog.has_schema_privilege(namespace.oid, 'USAGE')
+         AND pg_catalog.has_type_privilege(vector_type.oid, 'USAGE')
+         AND pg_catalog.has_function_privilege(cosine.oid, 'EXECUTE')
+         AND pg_catalog.has_function_privilege(vector_cast.castfunc, 'EXECUTE')`,
+    )
+    if (rows.length > 1) throw new InvalidStoredState("Multiple pgvector extensions returned")
+    const row = rows[0]
+    return row === undefined ? Option.none<string>() : Option.some(
+      quoteIdentifier(parseRow(PgvectorNamespaceRowSchema, row, "pgvector namespace").namespace),
+    )
+  },
+  catch: searchFailure,
+})
+
 const searchCandidates = async (
   connection: Queryable,
   tables: { readonly revisions: string; readonly chunks: string },
   request: SemanticCandidateRequest,
+  nativeNamespace: Option.Option<string>,
 ): Promise<ReadonlyArray<SemanticSearchCandidate>> => {
+  if (request.scope.target._tag === "NoDocuments") return []
+
   const values: Array<unknown> = [
     [...request.vector],
     request.embeddingProfile.id,
@@ -879,13 +953,33 @@ const searchCandidates = async (
   ]
   appendScopeSql(request.scope, values, filters)
 
+  const float64Score = `(
+    SELECT sum(component.stored * component.query) /
+           NULLIF(sqrt(sum(component.stored * component.stored)) *
+                  (SELECT norm FROM query_norm), 0)
+    FROM unnest(scoped.embedding, $1::double precision[]) AS component(stored, query)
+  )`
+  const score = Option.isSome(nativeNamespace)
+    ? `CASE WHEN scoped.embedding_native_eligible THEN
+         1 - ${nativeNamespace.value}.cosine_distance(
+           scoped.embedding::${nativeNamespace.value}.vector,
+           $1::double precision[]::${nativeNamespace.value}.vector
+         )
+       ELSE ${float64Score} END`
+    : float64Score
+
   values.push(request.candidates)
   const rows = await queryRows<SearchCandidateRow>(
     connection,
-    `WITH scoped AS MATERIALIZED (
+    `WITH query_norm AS MATERIALIZED (
+       SELECT sqrt(sum(component * component)) AS norm
+       FROM unnest($1::double precision[]) AS component
+     ),
+     scoped AS MATERIALIZED (
        SELECT c.chunk_id, c.document_key, c.section_key, c.section_part,
               c.content,
               c.has_metadata, c.metadata, c.embedding,
+              ${Option.isSome(nativeNamespace) ? "c.embedding_native_eligible," : ""}
               r.graph_id, r.document_kind, r.encoded_document_id,
               r.projection_id, r.projection_version, r.revision_hash
        FROM ${tables.chunks} AS c
@@ -893,27 +987,24 @@ const searchCandidates = async (
          ON r.document_key = c.document_key
         AND r.projection_id = c.projection_id
        WHERE ${filters.join("\n         AND ")}
+     ),
+     scored AS MATERIALIZED (
+       SELECT scoped.chunk_id, scoped.document_key, scoped.section_key, scoped.section_part,
+              scoped.content, scoped.has_metadata, scoped.metadata,
+              scoped.graph_id, scoped.document_kind, scoped.encoded_document_id,
+              scoped.projection_id, scoped.projection_version, scoped.revision_hash,
+              ${score} AS score FROM scoped
      )
-     SELECT similarity.score, scoped.chunk_id, scoped.document_key,
-            scoped.graph_id, scoped.document_kind,
-            scoped.encoded_document_id, scoped.projection_id,
-            scoped.projection_version, scoped.revision_hash,
-            scoped.section_key, scoped.section_part, scoped.content,
-            scoped.has_metadata, scoped.metadata
-     FROM scoped
-     CROSS JOIN LATERAL (
-       SELECT sum(stored.value * query.value) /
-              NULLIF(
-                sqrt(sum(stored.value * stored.value)) *
-                sqrt(sum(query.value * query.value)),
-                0
-              ) AS score
-       FROM unnest(scoped.embedding) WITH ORDINALITY AS stored(value, ordinal)
-       INNER JOIN unnest($1::double precision[]) WITH ORDINALITY AS query(value, ordinal)
-         USING (ordinal)
-     ) AS similarity
-     WHERE similarity.score IS NOT NULL
-     ORDER BY similarity.score DESC, scoped.chunk_id ASC
+     SELECT scored.score, scored.chunk_id, scored.document_key,
+            scored.graph_id, scored.document_kind,
+            scored.encoded_document_id, scored.projection_id,
+            scored.projection_version, scored.revision_hash,
+            scored.section_key, scored.section_part, scored.content,
+            scored.has_metadata, scored.metadata
+     FROM scored
+     WHERE scored.score IS NOT NULL
+       AND scored.score <> 'NaN'::double precision
+     ORDER BY scored.score DESC, scored.chunk_id ASC
      LIMIT $${values.length}`,
     values,
   )
@@ -928,6 +1019,8 @@ const searchTextCandidates = async (
   tables: { readonly revisions: string; readonly chunks: string },
   request: TextCandidateRequest,
 ): Promise<ReadonlyArray<TextSearchCandidate>> => {
+  if (request.scope.target._tag === "NoDocuments") return []
+
   const config = request.policy.language
   const searchColumn =
     config === "english" ? "text_search_english" : "text_search_simple"
@@ -955,7 +1048,9 @@ const searchTextCandidates = async (
               c.has_metadata, c.metadata,
               r.graph_id, r.document_kind, r.encoded_document_id,
               r.projection_id, r.projection_version, r.revision_hash,
-              (
+              CASE WHEN c.text_context IS NULL AND c.text_label IS NULL THEN
+                ${contentWeight} * ts_rank_cd(c.${searchColumn}, parsed.query)
+              ELSE (
                 ${contextWeight} * ts_rank_cd(
                   to_tsvector('${config}'::regconfig, coalesce(c.text_context, '')),
                   parsed.query
@@ -968,7 +1063,7 @@ const searchTextCandidates = async (
                   to_tsvector('${config}'::regconfig, c.text_content),
                   parsed.query
                 )
-              ) AS score
+              ) END AS score
        FROM ${tables.chunks} AS c
        INNER JOIN ${tables.revisions} AS r
          ON r.document_key = c.document_key
@@ -1018,22 +1113,73 @@ const replaceOutgoingRelationsInTransaction = async (
      WHERE graph_id = $1 AND source_document_key = $2`,
     [replacement.graph, replacement.sourceDocumentKey],
   )
+  const previousEdges = previousRows.map((unknownRow) =>
+    parseRow(
+      GraphEdgeIdentityRowSchema,
+      unknownRow,
+      "graph edge identity",
+    ),
+  )
   const previous = new Set(
-    previousRows.map((unknownRow) => {
-      const row = parseRow(
-        GraphEdgeIdentityRowSchema,
-        unknownRow,
-        "graph edge identity",
-      )
-      return makeGraphRelationEdgeIdentity({
+    previousEdges.map((row) =>
+      makeGraphRelationEdgeIdentity({
         relation: row.relation_id,
         targetDocumentKey: row.target_document_key,
-      })
-    }),
+      }),
+    ),
   )
 
   const next = plan.success.identities
   const rows = plan.success.edges
+
+  // Include the source in the same key order as targets. Source-first writes
+  // deadlock when two publishers simultaneously reference each other.
+  const nodesByKey = new Map<DocumentKey, StoredGraphNode>(
+    rows.map((row) => [
+      row.target.documentKey,
+      { ...row.target, state: "Referenced" },
+    ]),
+  )
+  nodesByKey.set(replacement.sourceDocumentKey, {
+    documentKey: replacement.sourceDocumentKey,
+    reference: replacement.source,
+    state: "Materialized",
+  })
+  const nodes = Array.from(nodesByKey.values()).sort((left, right) =>
+    left.documentKey.localeCompare(right.documentKey),
+  )
+  for (let offset = 0; offset < nodes.length; offset += InsertBatchSize) {
+    const batch = nodes.slice(offset, offset + InsertBatchSize)
+    const values: Array<unknown> = []
+    const valueRows = batch.map((node) => {
+      const start = values.length
+      values.push(
+        replacement.graph,
+        node.documentKey,
+        node.reference.kind,
+        encodeJson(node.reference.id),
+        node.state,
+      )
+      return `($${start + 1}, $${start + 2}, $${start + 3},
+        $${start + 4}::jsonb, $${start + 5})`
+    })
+    await client.query(
+      `INSERT INTO ${tables.nodes}
+         (graph_id, document_key, document_kind, encoded_document_id, node_state)
+       VALUES ${valueRows.join(",\n")}
+       ON CONFLICT (graph_id, document_key) DO UPDATE
+         SET document_kind = EXCLUDED.document_kind,
+             encoded_document_id = EXCLUDED.encoded_document_id,
+             node_state = CASE
+               WHEN ${tables.nodes}.node_state = 'Materialized'
+                 OR EXCLUDED.node_state = 'Materialized'
+                 THEN 'Materialized'
+               ELSE 'Referenced'
+             END,
+             updated_at = now()`,
+      values,
+    )
+  }
 
   await client.query(
     `DELETE FROM ${tables.relations}
@@ -1073,6 +1219,15 @@ const replaceOutgoingRelationsInTransaction = async (
     )
   }
 
+  // Only former targets can become orphaned in this replacement. Global
+  // collection belongs to reconciliation, not every document write.
+  await deleteOrphanedReferencedNodesInTransaction(
+    client,
+    tables,
+    replacement.graph,
+    previousEdges.map((edge) => edge.target_document_key),
+  )
+
   return countGraphRelationReplacement(previous, next)
 }
 
@@ -1085,15 +1240,83 @@ const parseDeletedGraphEdges = (rowInput: DeletedGraphEdgeCountRow): number => {
   return Number(row.deleted_count)
 }
 
-const deleteNodeRelationsInTransaction = async (
+const deleteOrphanedReferencedNodesInTransaction = async (
   client: TransactionClient,
-  table: string,
-  input: { readonly graph: string; readonly documentKey: string },
-): Promise<GraphRelationDeletion> => {
+  tables: PostgresTables,
+  graph: string,
+  candidates?: ReadonlyArray<DocumentKey>,
+): Promise<number> => {
+  if (candidates?.length === 0) return 0
+  const orphan = `node.graph_id = $1
+    AND node.node_state = 'Referenced'
+    AND NOT EXISTS (
+      SELECT 1 FROM ${tables.relations} AS edge
+      WHERE edge.graph_id = node.graph_id
+        AND (edge.source_document_key = node.document_key
+          OR edge.target_document_key = node.document_key)
+    )`
+  const values: Array<unknown> = [graph]
+  const target = candidates === undefined
+    ? ""
+    : "AND node.document_key = ANY($2::char(64)[])"
+  if (candidates !== undefined) values.push([...new Set(candidates)])
+  // Never wait for another publisher while holding this publication's nodes.
+  // Recheck under a fresh statement snapshot after acquiring these locks:
+  // a publisher may have committed an edge since the first snapshot began.
+  // Rows held by concurrent writers are left for a later reconciliation.
+  const locked = await queryRows<typeof GraphNodeKeyRowSchema.Encoded>(
+    client,
+    `SELECT node.document_key FROM ${tables.nodes} AS node
+     WHERE ${orphan} ${target}
+     ORDER BY node.document_key
+     FOR UPDATE SKIP LOCKED`,
+    values,
+  )
+  const keys = locked.map((row) =>
+    parseRow(GraphNodeKeyRowSchema, row, "orphan node key").document_key,
+  )
+  if (keys.length === 0) return 0
   const rows = await queryRows<DeletedGraphEdgeCountRow>(
     client,
     `WITH deleted AS (
-       DELETE FROM ${table}
+       DELETE FROM ${tables.nodes} AS node
+       WHERE ${orphan}
+         AND node.document_key = ANY($2::char(64)[])
+       RETURNING 1
+     )
+     SELECT count(*)::text AS deleted_count FROM deleted`,
+    [graph, keys],
+  )
+  const row = rows[0]
+  if (row === undefined) {
+    throw new InvalidStoredState(
+      "PostgreSQL did not return an orphaned referenced-node count",
+    )
+  }
+  return parseDeletedGraphEdges(row)
+}
+
+const deleteNodeRelationsInTransaction = async (
+  client: TransactionClient,
+  tables: PostgresTables,
+  input: { readonly graph: string; readonly documentKey: string },
+): Promise<GraphTopologyDeletion> => {
+  // Lock the node before counting/deleting incident edges. Every replacement
+  // locks its source and targets before changing edges, so the counts and
+  // hard deletion now describe the same topology state.
+  const locked = await queryRows<typeof GraphNodeKeyRowSchema.Encoded>(
+    client,
+    `SELECT document_key FROM ${tables.nodes}
+     WHERE graph_id = $1 AND document_key = $2 FOR UPDATE`,
+    [input.graph, input.documentKey],
+  )
+  if (locked.length === 0) {
+    return { deletedNodes: 0, deletedRelations: 0, deletedReferencedNodes: 0 }
+  }
+  const rows = await queryRows<DeletedGraphEdgeCountRow>(
+    client,
+    `WITH deleted AS (
+       DELETE FROM ${tables.relations}
        WHERE graph_id = $1
          AND (source_document_key = $2 OR target_document_key = $2)
        RETURNING 1
@@ -1105,14 +1328,39 @@ const deleteNodeRelationsInTransaction = async (
   if (row === undefined) {
     throw new InvalidStoredState("PostgreSQL did not return an edge count")
   }
-  return { deleted: parseDeletedGraphEdges(row) }
+  const deletedRelations = parseDeletedGraphEdges(row)
+  const deletedNodes = await queryRows<DeletedGraphEdgeCountRow>(
+    client,
+    `WITH deleted AS (
+       DELETE FROM ${tables.nodes}
+       WHERE graph_id = $1 AND document_key = $2
+       RETURNING 1
+     )
+     SELECT count(*)::text AS deleted_count FROM deleted`,
+    [input.graph, input.documentKey],
+  )
+  const nodeRow = deletedNodes[0]
+  if (nodeRow === undefined) {
+    throw new InvalidStoredState("PostgreSQL did not return a node count")
+  }
+  const deletedReferencedNodes =
+    await deleteOrphanedReferencedNodesInTransaction(
+      client,
+      tables,
+      input.graph,
+    )
+  return {
+    deletedNodes: parseDeletedGraphEdges(nodeRow),
+    deletedRelations,
+    deletedReferencedNodes,
+  }
 }
 
 const pruneRelationsInTransaction = async (
   client: TransactionClient,
-  table: string,
-  input: PruneGraphRelations,
-): Promise<GraphRelationPrune> => {
+  tables: PostgresTables,
+  input: PruneGraphTopology,
+): Promise<GraphTopologyPrune> => {
   const values: Array<unknown> = [input.graph]
   let stale = "edge.graph_id = $1"
   if (input.registered.length > 0) {
@@ -1144,7 +1392,7 @@ const pruneRelationsInTransaction = async (
   const rows = await queryRows<DeletedGraphEdgeCountRow>(
     client,
     `WITH deleted AS (
-       DELETE FROM ${table} AS edge WHERE ${stale}
+       DELETE FROM ${tables.relations} AS edge WHERE ${stale}
        RETURNING 1
      )
      SELECT count(*)::text AS deleted_count FROM deleted`,
@@ -1154,65 +1402,126 @@ const pruneRelationsInTransaction = async (
   if (row === undefined) {
     throw new InvalidStoredState("PostgreSQL did not return a prune count")
   }
-  return { deleted: parseDeletedGraphEdges(row) }
+  const deletedRelations = parseDeletedGraphEdges(row)
+  const deletedReferencedNodes =
+    await deleteOrphanedReferencedNodesInTransaction(
+      client,
+      tables,
+      input.graph,
+    )
+  return {
+    deletedRelations,
+    deletedReferencedNodes,
+  }
 }
 
-const findGraphNeighbours = async (
+const listGraphNodes = async (
   connection: Queryable,
   table: string,
-  input: {
-    readonly direction: "outgoing" | "incoming"
-    readonly graph: string
-    readonly currentDocumentKey: string
-    readonly currentDocumentKind: string
-    readonly relation: string
-    readonly relationVersion: string
-    readonly neighbourDocumentKind: string
-    readonly limit: number
-  },
-): Promise<ReadonlyArray<StoredGraphNeighbour>> => {
-  const current = input.direction === "outgoing" ? "source" : "target"
-  const neighbour = input.direction === "outgoing" ? "target" : "source"
-  const rows = await queryRows<GraphNeighbourRow>(
+  input: ListGraphNodes,
+): Promise<GraphNodePage> => {
+  const values: Array<unknown> = [input.graph]
+  const filters = ["graph_id = $1"]
+  if (input.documentKinds.length > 0) {
+    values.push(input.documentKinds)
+    filters.push(`document_kind = ANY($${values.length}::text[])`)
+  }
+  if (input.states.length > 0) {
+    values.push(input.states)
+    filters.push(`node_state = ANY($${values.length}::text[])`)
+  }
+  if (Option.isSome(input.after)) {
+    values.push(input.after.value)
+    filters.push(`document_key > $${values.length}`)
+  }
+  values.push(input.limit + 1)
+  const rows = await queryRows<GraphNodeRow>(
     connection,
-    `SELECT ${neighbour}_document_key AS document_key, graph_id,
-            ${neighbour}_document_kind AS document_kind,
-            encoded_${neighbour}_document_id AS encoded_document_id
+    `SELECT document_key, graph_id, document_kind, encoded_document_id,
+            node_state
      FROM ${table}
-     WHERE graph_id = $1
-       AND ${current}_document_key = $2
-       AND ${current}_document_kind = $3
-       AND relation_id = $4
-       AND relation_version = $5
-       AND ${neighbour}_document_kind = $6
-     ORDER BY ${neighbour}_document_key
-     LIMIT $7`,
-    [
-      input.graph,
-      input.currentDocumentKey,
-      input.currentDocumentKind,
-      input.relation,
-      input.relationVersion,
-      input.neighbourDocumentKind,
-      input.limit,
-    ],
+     WHERE ${filters.join(" AND ")}
+     ORDER BY document_key
+     LIMIT $${values.length}`,
+    values,
   )
+  const parsed = rows.map((unknownRow) =>
+    parseRow(GraphNodeRowSchema, unknownRow, "graph node"),
+  )
+  const hasMore = parsed.length > input.limit
+  const visible = hasMore ? parsed.slice(0, input.limit) : parsed
+  const nodes: ReadonlyArray<StoredGraphNode> = visible.map((row) => ({
+    documentKey: row.document_key,
+    reference: {
+      graph: row.graph_id,
+      kind: row.document_kind,
+      id: row.encoded_document_id,
+    },
+    state: row.node_state,
+  }))
+  const last = nodes.at(-1)
+  return {
+    nodes,
+    next: hasMore && last !== undefined
+      ? Option.some(last.documentKey)
+      : Option.none(),
+  }
+}
 
-  return rows.map((unknownRow) => {
-    const row = parseRow(
-      GraphNeighbourRowSchema,
-      unknownRow,
-      `${input.direction} graph neighbour`,
-    )
-    return {
-      documentKey: row.document_key,
-      reference: {
-        graph: row.graph_id,
-        kind: row.document_kind,
-        id: row.encoded_document_id,
-      },
+const RelatedGraphNodeRowSchema = Schema.Struct({
+  ...GraphNodeRowSchema.fields,
+  request_ordinal: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+})
+
+const findRelatedGraphNodes = async (
+  connection: Queryable,
+  tables: PostgresTables,
+  input: FindRelatedGraphNodes,
+): Promise<ReadonlyArray<RelatedGraphNodeSet>> => {
+  if (input.documentKeys.length === 0) return []
+  const current = input.direction === "outgoing" ? "source" : "target"
+  const related = input.direction === "outgoing" ? "target" : "source"
+  const rows = await queryRows<Schema.Codec.Encoded<typeof RelatedGraphNodeRowSchema>>(
+    connection,
+    `SELECT (requested.ordinal - 1)::integer AS request_ordinal, neighbours.*
+     FROM unnest($2::char(64)[]) WITH ORDINALITY AS requested(document_key, ordinal)
+     CROSS JOIN LATERAL (
+       SELECT node.document_key, node.graph_id, node.document_kind,
+              node.encoded_document_id, node.node_state
+       FROM ${tables.relations} AS edge
+       INNER JOIN ${tables.nodes} AS node
+         ON node.graph_id = edge.graph_id
+        AND node.document_key = edge.${related}_document_key
+       WHERE edge.graph_id = $1
+         AND edge.${current}_document_key = requested.document_key
+         AND edge.${current}_document_kind = $3
+         AND edge.relation_id = $4
+         AND edge.relation_version = $5
+         AND edge.${related}_document_kind = $6
+       ORDER BY node.document_key
+       LIMIT $7
+     ) AS neighbours
+     ORDER BY requested.ordinal, neighbours.document_key`,
+    [input.graph, [...input.documentKeys], input.documentKind, input.relation,
+      input.relationVersion, input.relatedDocumentKind, input.limit],
+  )
+  const groups = input.documentKeys.map((documentKey) => ({
+    documentKey,
+    nodes: new Array<StoredGraphNode>(),
+  }))
+  for (const unknownRow of rows) {
+    const row = parseRow(RelatedGraphNodeRowSchema, unknownRow, "related graph node")
+    const group = groups[row.request_ordinal]
+    if (group === undefined || group.nodes.length >= input.limit) {
+      throw new InvalidStoredState("Invalid related graph node batch")
     }
-  })
+    group.nodes.push({
+      documentKey: row.document_key,
+      reference: { graph: row.graph_id, kind: row.document_kind, id: row.encoded_document_id },
+      state: row.node_state,
+    })
+  }
+  return groups
 }
 
 const namedPostgresOperation = <
@@ -1230,15 +1539,18 @@ const namedPostgresOperation = <
 
 const makePostgresStorage = (
   config: PostgresDocumentGraphConfig,
+  nativeNamespace: Effect.Effect<Option.Option<string>, ProjectionSearchStoreFailed>,
 ): DocumentGraphStorageService => {
   const schema = Schema.decodeSync(PostgresSchemaNameSchema)(
     config.schema ?? DefaultSchema,
   )
   const namespace = quoteIdentifier(schema)
+  const vectorSearch = Schema.decodeSync(Schema.Literals(["auto", "float64"]))(config.vectorSearch ?? "auto")
   const tables: PostgresTables = {
     revisions: `${namespace}."projected_revisions"`,
     chunks: `${namespace}."projected_chunks"`,
     relations: `${namespace}."graph_relations"`,
+    nodes: `${namespace}."graph_nodes"`,
     locks: `${namespace}."mutation_locks"`,
   }
 
@@ -1323,12 +1635,16 @@ const makePostgresStorage = (
         (cause) => indexFailure("prune_graph", cause),
       ),
 
-    searchCandidates: (request) =>
-      Effect.tryPromise({
-        try: () =>
-          searchCandidates(connectionFor(config), tables, request),
+    searchCandidates: (request) => {
+      if (request.scope.target._tag === "NoDocuments") return Effect.succeed([])
+      const namespace = vectorSearch === "float64" || !nativeQueryEligible(request.vector)
+        ? Effect.succeed(Option.none<string>())
+        : nativeNamespace
+      return namespace.pipe(Effect.flatMap((resolved) => Effect.tryPromise({
+        try: () => searchCandidates(connectionFor(config), tables, request, resolved),
         catch: searchFailure,
-      }),
+      })))
+    },
 
     searchTextCandidates: (request) =>
       Effect.tryPromise({
@@ -1337,7 +1653,7 @@ const makePostgresStorage = (
         catch: textSearchFailure,
       }),
 
-    replaceOutgoing: (replacement) =>
+    replaceDocumentTopology: (replacement) =>
       transactionEffect(
         config,
         (client) =>
@@ -1346,7 +1662,7 @@ const makePostgresStorage = (
             tables,
             replacement,
           ),
-        (cause) => relationFailure("replace_outgoing", cause),
+        (cause) => topologyFailure("replace_document", cause),
       ),
 
     deleteNode: (input) =>
@@ -1355,58 +1671,36 @@ const makePostgresStorage = (
         (client) =>
           deleteNodeRelationsInTransaction(
             client,
-            tables.relations,
+            tables,
             input,
           ),
-        (cause) => relationFailure("delete_node", cause),
+        (cause) => topologyFailure("delete_node", cause),
       ),
 
-    pruneRelations: (input) =>
+    pruneTopology: (input) =>
       transactionEffect(
         config,
         (client) =>
-          pruneRelationsInTransaction(client, tables.relations, input),
-        (cause) => relationFailure("prune_graph", cause),
+          pruneRelationsInTransaction(client, tables, input),
+        (cause) => topologyFailure("prune_graph", cause),
       ),
 
-    findOutgoing: (input) =>
+    listNodes: (input) =>
       Effect.tryPromise({
         try: () =>
-          findGraphNeighbours(
+          listGraphNodes(
             connectionFor(config),
-            tables.relations,
-            {
-              direction: "outgoing",
-              graph: input.graph,
-              currentDocumentKey: input.sourceDocumentKey,
-              currentDocumentKind: input.sourceDocumentKind,
-              relation: input.relation,
-              relationVersion: input.relationVersion,
-              neighbourDocumentKind: input.targetDocumentKind,
-              limit: input.limit,
-            },
+            tables.nodes,
+            input,
           ),
-        catch: (cause) => relationFailure("find_outgoing", cause),
+        catch: (cause) => topologyFailure("list_nodes", cause),
       }),
 
-    findIncoming: (input) =>
+    findRelatedNodes: (input) =>
       Effect.tryPromise({
         try: () =>
-          findGraphNeighbours(
-            connectionFor(config),
-            tables.relations,
-            {
-              direction: "incoming",
-              graph: input.graph,
-              currentDocumentKey: input.targetDocumentKey,
-              currentDocumentKind: input.targetDocumentKind,
-              relation: input.relation,
-              relationVersion: input.relationVersion,
-              neighbourDocumentKind: input.sourceDocumentKind,
-              limit: input.limit,
-            },
-          ),
-        catch: (cause) => relationFailure("find_incoming", cause),
+          findRelatedGraphNodes(connectionFor(config), tables, input),
+        catch: (cause) => topologyFailure("find_related", cause),
       }),
   }
 
@@ -1435,25 +1729,25 @@ const makePostgresStorage = (
       "PostgresProjectionSearch.searchTextCandidates",
       storage.searchTextCandidates,
     ),
-    replaceOutgoing: namedPostgresOperation(
-      "PostgresGraphRelations.replaceOutgoing",
-      storage.replaceOutgoing,
+    replaceDocumentTopology: namedPostgresOperation(
+      "PostgresGraphTopology.replaceDocumentTopology",
+      storage.replaceDocumentTopology,
     ),
     deleteNode: namedPostgresOperation(
-      "PostgresGraphRelations.deleteNode",
+      "PostgresGraphTopology.deleteNode",
       storage.deleteNode,
     ),
-    pruneRelations: namedPostgresOperation(
-      "PostgresGraphRelations.pruneRelations",
-      storage.pruneRelations,
+    pruneTopology: namedPostgresOperation(
+      "PostgresGraphTopology.pruneTopology",
+      storage.pruneTopology,
     ),
-    findOutgoing: namedPostgresOperation(
-      "PostgresGraphRelations.findOutgoing",
-      storage.findOutgoing,
+    listNodes: namedPostgresOperation(
+      "PostgresGraphTopology.listNodes",
+      storage.listNodes,
     ),
-    findIncoming: namedPostgresOperation(
-      "PostgresGraphRelations.findIncoming",
-      storage.findIncoming,
+    findRelatedNodes: namedPostgresOperation(
+      "PostgresGraphTopology.findRelatedNodes",
+      storage.findRelatedNodes,
     ),
   }
 }
@@ -1464,9 +1758,19 @@ const makePostgresStorage = (
  * The caller owns the Pool or active transaction and remains responsible for
  * its lifecycle. Pool mode owns each operation's transaction; transaction
  * mode uses a savepoint and never commits the caller's transaction. The
- * adapter supports arbitrary embedding dimensions without pgvector.
+ * adapter uses installed pgvector automatically for eligible vectors, with
+ * float64 array scoring for other vectors or vectorSearch: "float64".
+ * Apply all ordered PostgreSQL migrations before using this Layer.
  */
 export const postgresDocumentGraph = (
   config: PostgresDocumentGraphConfig,
 ): ReturnType<typeof makeDocumentGraphStorage> =>
-  makeDocumentGraphStorage(makePostgresStorage(config))
+  Layer.unwrap(Effect.gen(function*() {
+    // Exit-aware TTL prevents a transient connection failure from poisoning
+    // the capability cache. Concurrent routes share one discovery request.
+    const capabilities = yield* Cache.makeWith(
+      () => discoverPgvectorNamespace(connectionFor(config)),
+      { capacity: 1, timeToLive: (exit) => Exit.isSuccess(exit) ? "5 minutes" : 0 },
+    )
+    return makeDocumentGraphStorage(makePostgresStorage(config, Cache.get(capabilities, "pgvector")))
+  }))

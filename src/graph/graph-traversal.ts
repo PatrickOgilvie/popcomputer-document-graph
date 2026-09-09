@@ -3,17 +3,19 @@ import type { DocumentKey, InvalidDocumentIdentity } from "../document/document-
 import type { EncodedDocumentReference } from "../document/document-instance.js"
 import type { InvalidDocumentReference } from "./document-graph-errors.js"
 import {
-  GraphRelationStore,
-  InvalidGraphNeighbourOutput,
   type GraphNeighbourLimit,
   type GraphRelationDefinitions,
 } from "./graph-relation.js"
 import { invalidDocumentReference } from "./graph-reference.js"
+import {
+  GraphTopologyStore,
+  InvalidGraphTopologyOutput,
+} from "./graph-topology.js"
 
 export interface FindGraphNeighboursWorkflowInput<Reference> {
   readonly graph: string
   readonly relations: GraphRelationDefinitions
-  readonly currentDocumentKey: DocumentKey
+  readonly currentDocumentKeys: ReadonlyArray<DocumentKey>
   readonly currentDocumentKind: string
   readonly relationId: string
   readonly direction: "outgoing" | "incoming"
@@ -32,7 +34,7 @@ export interface RuntimeGraphNeighbour<Reference> {
   readonly reference: Reference
 }
 
-/** Read and validate one bounded, deterministic neighbour set. */
+/** Read ordered neighbour groups and validate every source and result identity. */
 export const findGraphNeighboursWorkflow = Effect.fn(
   "GraphTraversal.findNeighbours",
 )(function*<Reference>(input: FindGraphNeighboursWorkflowInput<Reference>) {
@@ -48,76 +50,88 @@ export const findGraphNeighboursWorkflow = Effect.fn(
     )
   }
 
-  const store = yield* GraphRelationStore
-  const stored = yield* (input.direction === "outgoing"
-    ? store.findOutgoing({
-        graph: input.graph,
-        sourceDocumentKey: input.currentDocumentKey,
-        sourceDocumentKind: input.currentDocumentKind,
-        relation: input.relationId,
-        relationVersion: relation.version,
-        targetDocumentKind: relation.to,
-        limit: input.limit,
-      })
-    : store.findIncoming({
-        graph: input.graph,
-        targetDocumentKey: input.currentDocumentKey,
-        targetDocumentKind: input.currentDocumentKind,
-        relation: input.relationId,
-        relationVersion: relation.version,
-        sourceDocumentKind: relation.from,
-        limit: input.limit,
-      }))
+  const store = yield* GraphTopologyStore
   const neighbourKind = input.direction === "outgoing"
     ? relation.to
     : relation.from
-  if (stored.length > input.limit) {
-    return yield* Effect.fail(
-      new InvalidGraphNeighbourOutput({ reason: "too_many" }),
-    )
+  const stored = yield* store.findRelatedNodes({
+    graph: input.graph,
+    documentKeys: input.currentDocumentKeys,
+    documentKind: input.currentDocumentKind,
+    direction: input.direction,
+    relation: input.relationId,
+    relationVersion: relation.version,
+    relatedDocumentKind: neighbourKind,
+    limit: input.limit,
+  })
+  if (stored.length !== input.currentDocumentKeys.length || stored.some(
+    (group, index) => group.documentKey !== input.currentDocumentKeys[index],
+  )) {
+    return yield* Effect.fail(new InvalidGraphTopologyOutput({
+      output: "related_nodes",
+      reason: "invalid_batch",
+    }))
   }
 
-  const seen = new Set<DocumentKey>()
-  let previousKey: DocumentKey | undefined
-  for (const candidate of stored) {
-    if (seen.has(candidate.documentKey)) {
+  return yield* Effect.forEach(stored, (group) => Effect.gen(function*() {
+    if (group.nodes.length > input.limit) {
       return yield* Effect.fail(
-        new InvalidGraphNeighbourOutput({ reason: "duplicate" }),
+        new InvalidGraphTopologyOutput({
+          output: "related_nodes",
+          reason: "too_many",
+        }),
       )
     }
-    if (
-      previousKey !== undefined &&
-      String(previousKey).localeCompare(String(candidate.documentKey)) > 0
-    ) {
-      return yield* Effect.fail(
-        new InvalidGraphNeighbourOutput({ reason: "not_ordered" }),
-      )
-    }
-    seen.add(candidate.documentKey)
-    previousKey = candidate.documentKey
-  }
 
-  return yield* Effect.forEach(stored, (candidate) =>
-    input.parseReference(candidate.reference).pipe(
-      Effect.flatMap((reference) => {
-        if (input.referenceKind(reference) !== neighbourKind) {
-          return Effect.fail(
-            invalidDocumentReference("unknown_document_kind"),
-          )
-        }
-        return input.referenceKey(reference).pipe(
-          Effect.flatMap((parsedKey) =>
-            parsedKey === candidate.documentKey
-              ? Effect.succeed({
-                  documentKey: candidate.documentKey,
-                  reference,
-                })
-              : Effect.fail(
-                  invalidDocumentReference("invalid_document_id"),
-                ),
-          ),
+    const seen = new Set<DocumentKey>()
+    let previousKey: DocumentKey | undefined
+    for (const candidate of group.nodes) {
+      if (seen.has(candidate.documentKey)) {
+        return yield* Effect.fail(
+          new InvalidGraphTopologyOutput({
+            output: "related_nodes",
+            reason: "duplicate",
+          }),
         )
-      }),
+      }
+      if (
+        previousKey !== undefined &&
+        String(previousKey).localeCompare(String(candidate.documentKey)) > 0
+      ) {
+        return yield* Effect.fail(
+          new InvalidGraphTopologyOutput({
+            output: "related_nodes",
+            reason: "not_ordered",
+          }),
+        )
+      }
+      seen.add(candidate.documentKey)
+      previousKey = candidate.documentKey
+    }
+
+    const nodes = yield* Effect.forEach(group.nodes, (candidate) =>
+      input.parseReference(candidate.reference).pipe(
+        Effect.flatMap((reference) => {
+          if (input.referenceKind(reference) !== neighbourKind) {
+            return Effect.fail(
+              invalidDocumentReference("unknown_document_kind"),
+            )
+          }
+          return input.referenceKey(reference).pipe(
+            Effect.flatMap((parsedKey) =>
+              parsedKey === candidate.documentKey
+                ? Effect.succeed({
+                    documentKey: candidate.documentKey,
+                    reference,
+                  })
+                : Effect.fail(
+                    invalidDocumentReference("invalid_document_id"),
+                  ),
+            ),
+          )
+        }),
+      )
     )
-  )
+    return { documentKey: group.documentKey, nodes }
+  }))
 })

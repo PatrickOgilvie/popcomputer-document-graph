@@ -1,0 +1,1523 @@
+{
+  "measuredOn": "2026-09-07",
+  "nativeScorer": {
+    "repository": "https://github.com/pgvector/pgvector",
+    "version": "0.8.6",
+    "commit": "8ee86c96f0fd72390f890aa8a336fda6d3ab4c6c",
+    "approximateIndex": false
+  },
+  "postgres": "17.8 (Homebrew)",
+  "node": "v22.22.2",
+  "measuredRuns": 5,
+  "warmupRuns": 1,
+  "jit": false,
+  "fixture": {
+    "documents": 10000,
+    "agencies": 1000,
+    "caseStudies": 9000,
+    "relations": 9270,
+    "dimensions": 1024,
+    "chunksPerDocument": 1
+  },
+  "preprocessing": {
+    "milliseconds": 3209.2257500000005,
+    "originalChunkBytes": 101711872,
+    "experimentalChunkBytes": 133292032,
+    "note": "Size after ALTER/UPDATE includes dead tuples; this is not a steady-state storage overhead measurement."
+  },
+  "query": {
+    "text": "healthcare brand identity",
+    "candidatesPerChannelPerRoute": 50,
+    "resultLimit": 10
+  },
+  "nonNativeResultsBitIdentical": true,
+  "nativeComparisons": {
+    "semantic/pgvector_exact": {
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": false,
+      "targetIds": [
+        740,
+        40,
+        851,
+        888,
+        710,
+        518,
+        750,
+        79,
+        222,
+        777
+      ],
+      "top10Overlap": 10
+    },
+    "semantic/pgvector_exact_combined": {
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": false,
+      "targetIds": [
+        740,
+        40,
+        851,
+        888,
+        710,
+        518,
+        750,
+        79,
+        222,
+        777
+      ],
+      "top10Overlap": 10
+    },
+    "hybrid/pgvector_exact": {
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": false,
+      "targetIds": [
+        740,
+        518,
+        444,
+        777,
+        851,
+        520,
+        40,
+        111,
+        710,
+        910
+      ],
+      "top10Overlap": 10
+    },
+    "hybrid/pgvector_exact_combined": {
+      "targetOrderEqual": true,
+      "ranksAndEvidenceEqual": true,
+      "scoresBitIdentical": false,
+      "targetIds": [
+        740,
+        518,
+        444,
+        777,
+        851,
+        520,
+        40,
+        111,
+        710,
+        910
+      ],
+      "top10Overlap": 10
+    }
+  },
+  "profileOnlyGate": {
+    "semantic": {
+      "directCandidateAgencies": 50,
+      "top10AgenciesLostByProfileOnlyGate": [
+        40,
+        710,
+        750,
+        79
+      ]
+    },
+    "text": {
+      "directCandidateAgencies": 27,
+      "top10AgenciesLostByProfileOnlyGate": [
+        500,
+        240,
+        700,
+        210,
+        70
+      ]
+    },
+    "hybrid": {
+      "directCandidateAgencies": 50,
+      "top10AgenciesLostByProfileOnlyGate": [
+        520,
+        40,
+        710,
+        910
+      ]
+    }
+  },
+  "results": [
+    {
+      "strategy": "semantic",
+      "variant": "current",
+      "medianMilliseconds": 1083.3262499999983,
+      "samplesMilliseconds": [
+        1084.0553330000002,
+        1088.0253749999974,
+        1070.5418329999957,
+        1083.3262499999983,
+        1060.1123750000042
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        1081.8243779999939,
+        1085.8950009999899,
+        1067.7129989999812,
+        1081.1151660000105,
+        1057.9223739999798
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "inline_scope",
+      "medianMilliseconds": 1064.7060410000013,
+      "samplesMilliseconds": [
+        1111.008249999999,
+        1064.7060410000013,
+        1057.3874170000054,
+        1073.558917000002,
+        1052.7510830000028
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        1109.1765379999815,
+        1062.5407070000183,
+        1052.5189630000023,
+        1071.4833340000405,
+        1050.9530829999421
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "query_norm_once",
+      "medianMilliseconds": 1018.7472500000003,
+      "samplesMilliseconds": [
+        1025.8014589999984,
+        1036.1032500000001,
+        954.7025829999984,
+        958.158875000001,
+        1018.7472500000003
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        1023.975124000026,
+        1032.9190420000086,
+        952.873419999989,
+        955.8940879999936,
+        1016.8663730000189
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "batch_relations",
+      "medianMilliseconds": 1097.476999999999,
+      "samplesMilliseconds": [
+        1069.3717910000014,
+        1955.666709000001,
+        1073.3835839999956,
+        1097.476999999999,
+        1101.184291999998
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "summedStatementMilliseconds": [
+        1065.6249590000007,
+        1947.1444580000025,
+        1069.5733739999923,
+        1093.2866249999934,
+        1097.6493750000081
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "stored_norms",
+      "medianMilliseconds": 918.1558339999974,
+      "samplesMilliseconds": [
+        924.9952499999999,
+        994.7157909999987,
+        866.3540829999984,
+        854.4542500000025,
+        918.1558339999974
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        922.9443320000137,
+        992.5483729999905,
+        864.3322949999638,
+        852.6805780000504,
+        916.3292919999658
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "combined",
+      "medianMilliseconds": 892.9990000000034,
+      "samplesMilliseconds": [
+        906.1967079999995,
+        892.9990000000034,
+        848.8040830000027,
+        861.7418749999997,
+        930.9300000000003
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "summedStatementMilliseconds": [
+        902.034083999999,
+        889.057624999994,
+        844.9047090000095,
+        857.742250000003,
+        927.2922909999979
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "pgvector_exact",
+      "medianMilliseconds": 90.62416600000142,
+      "samplesMilliseconds": [
+        123.59137499999997,
+        94.2433330000058,
+        78.25054200000159,
+        90.62416600000142,
+        82.73700000000099
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        121.38383700000486,
+        92.34675000000425,
+        76.53141700004198,
+        88.8232530000023,
+        80.34525199999916
+      ]
+    },
+    {
+      "strategy": "semantic",
+      "variant": "pgvector_exact_combined",
+      "medianMilliseconds": 74.9230830000015,
+      "samplesMilliseconds": [
+        139.88004100000035,
+        73.92970900000364,
+        74.44820900000195,
+        75.1727499999979,
+        74.9230830000015
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "summedStatementMilliseconds": [
+        135.05808400000024,
+        70.42337499999849,
+        70.62912599999981,
+        69.61345799999981,
+        71.23845899999287
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "current",
+      "medianMilliseconds": 26.793125000003783,
+      "samplesMilliseconds": [
+        27.303124999998545,
+        26.120875000000524,
+        26.793125000003783,
+        25.23174999999901,
+        28.907500000001164
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        25.685374999942724,
+        24.683997999985877,
+        25.391665999974066,
+        23.786878000020806,
+        27.376994000034756
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "inline_scope",
+      "medianMilliseconds": 31.769124999998894,
+      "samplesMilliseconds": [
+        31.769124999998894,
+        31.836875000000873,
+        35.37449999999808,
+        31.66425000000163,
+        30.703042000001005
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        30.221710999998322,
+        30.26024899996264,
+        33.78354499996931,
+        30.06487200000265,
+        29.352000999970187
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "batch_relations",
+      "medianMilliseconds": 19.277791000000434,
+      "samplesMilliseconds": [
+        19.277791000000434,
+        19.560958000001847,
+        21.583666999998968,
+        18.65429199999926,
+        17.57325000000128
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "summedStatementMilliseconds": [
+        16.009916999995767,
+        15.957291999999143,
+        18.362832999999227,
+        15.785792000002402,
+        14.67033399999491
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "cached_text",
+      "medianMilliseconds": 22.428665999999794,
+      "samplesMilliseconds": [
+        22.351957999999286,
+        24.668999999994412,
+        25.91533299999719,
+        22.428665999999794,
+        21.927999999999884
+      ],
+      "statementCounts": [
+        52,
+        52,
+        52,
+        52,
+        52
+      ],
+      "summedStatementMilliseconds": [
+        20.920831999996153,
+        23.128378000008524,
+        24.51470199999312,
+        21.061456999988877,
+        20.62270600001648
+      ]
+    },
+    {
+      "strategy": "text",
+      "variant": "combined",
+      "medianMilliseconds": 15.532084000005852,
+      "samplesMilliseconds": [
+        16.463791000001947,
+        15.88524999999936,
+        15.532084000005852,
+        15.460416000001715,
+        15.075000000004366
+      ],
+      "statementCounts": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "summedStatementMilliseconds": [
+        13.097584000002826,
+        12.993042000001878,
+        12.610166000005847,
+        12.350041000012425,
+        12.170250000002852
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "current",
+      "medianMilliseconds": 1111.382249999995,
+      "samplesMilliseconds": [
+        1111.382249999995,
+        1112.8372080000117,
+        1154.0335829999967,
+        1102.480917000008,
+        1098.341167000006
+      ],
+      "statementCounts": [
+        104,
+        104,
+        104,
+        104,
+        104
+      ],
+      "summedStatementMilliseconds": [
+        1109.0002499999682,
+        1110.6334170000628,
+        1151.5235060000414,
+        1100.3676229999546,
+        1095.8842509999522
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "inline_scope",
+      "medianMilliseconds": 1100.2723750000005,
+      "samplesMilliseconds": [
+        1100.2723750000005,
+        1096.806958000001,
+        1161.548041999995,
+        1201.5535410000011,
+        1095.0827499999868
+      ],
+      "statementCounts": [
+        104,
+        104,
+        104,
+        104,
+        104
+      ],
+      "summedStatementMilliseconds": [
+        1097.8169179999823,
+        1094.3815359999862,
+        1159.3087440000236,
+        1199.1991670000425,
+        1092.8972490000742
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "query_norm_once",
+      "medianMilliseconds": 1021.4258339999942,
+      "samplesMilliseconds": [
+        1021.4258339999942,
+        997.3728750000009,
+        1100.1713750000054,
+        1136.1654580000031,
+        1010.6372910000064
+      ],
+      "statementCounts": [
+        104,
+        104,
+        104,
+        104,
+        104
+      ],
+      "summedStatementMilliseconds": [
+        1019.1000050001167,
+        994.8465370000777,
+        1097.7717059999995,
+        1133.992082999961,
+        1008.4542489998566
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "batch_relations",
+      "medianMilliseconds": 1135.435083000004,
+      "samplesMilliseconds": [
+        1301.882292000002,
+        1203.2976250000065,
+        1104.3406669999968,
+        1135.435083000004,
+        1079.3732080000045
+      ],
+      "statementCounts": [
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "summedStatementMilliseconds": [
+        1296.179959000001,
+        1197.736750000011,
+        1097.902248999977,
+        1129.5805830000027,
+        1074.1770020000113
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "stored_norms",
+      "medianMilliseconds": 900.315374999991,
+      "samplesMilliseconds": [
+        937.744749999998,
+        887.2519170000014,
+        900.315374999991,
+        903.0438339999964,
+        877.674125000005
+      ],
+      "statementCounts": [
+        104,
+        104,
+        104,
+        104,
+        104
+      ],
+      "summedStatementMilliseconds": [
+        935.3693660000281,
+        885.1084959999862,
+        897.8587120000448,
+        900.8649910000531,
+        875.2159949999623
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "cached_text",
+      "medianMilliseconds": 1101.7354579999956,
+      "samplesMilliseconds": [
+        1120.3111250000002,
+        1100.5308750000113,
+        1327.1417920000094,
+        1101.7354579999956,
+        1089.7313330000034
+      ],
+      "statementCounts": [
+        104,
+        104,
+        104,
+        104,
+        104
+      ],
+      "summedStatementMilliseconds": [
+        1117.9160410000259,
+        1098.3381639999861,
+        1324.79991899991,
+        1099.534418999945,
+        1087.519289999953
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "combined",
+      "medianMilliseconds": 867.867499999993,
+      "samplesMilliseconds": [
+        867.1697089999943,
+        869.0720000000001,
+        938.6652910000121,
+        865.3895420000044,
+        867.867499999993
+      ],
+      "statementCounts": [
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "summedStatementMilliseconds": [
+        861.3372490000038,
+        863.7964169999759,
+        928.7908729999908,
+        860.0789170000062,
+        862.1426250000077
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "pgvector_exact",
+      "medianMilliseconds": 116.38570900000195,
+      "samplesMilliseconds": [
+        116.38570900000195,
+        116.69291700000758,
+        107.90958300000057,
+        132.92420799999672,
+        112.1363330000022
+      ],
+      "statementCounts": [
+        104,
+        104,
+        104,
+        104,
+        104
+      ],
+      "summedStatementMilliseconds": [
+        113.90383100001782,
+        114.54566499993962,
+        105.66799899999751,
+        130.45150200002536,
+        109.68683000003512
+      ]
+    },
+    {
+      "strategy": "hybrid",
+      "variant": "pgvector_exact_combined",
+      "medianMilliseconds": 89.95583400000032,
+      "samplesMilliseconds": [
+        89.95583400000032,
+        88.41733300000487,
+        89.05137499999546,
+        108.33683299999393,
+        96.53637499999604
+      ],
+      "statementCounts": [
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "summedStatementMilliseconds": [
+        84.32783300001029,
+        82.6447499999922,
+        83.8097500000149,
+        102.00433300000441,
+        90.92724999999336
+      ]
+    }
+  ],
+  "sampleResults": {
+    "semantic": [
+      {
+        "rank": 1,
+        "score": 0.027692895339954164,
+        "agencyId": 740,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 740,
+            "chunkId": "1a40b71d10a8d3af3592af9f73654b02ee640067f43b93b60bb1593c863efc79",
+            "rank": 8
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6654,
+            "chunkId": "6c6c079ffa382038f9fd7601c64021d8496b4d18afe7d1a5aab306bf9f70949c",
+            "rank": 27
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6652,
+            "chunkId": "7b9fc0eee60338175689577ab368fd17228d4ea330721a7b357bfe4af66c9435",
+            "rank": 29
+          }
+        ]
+      },
+      {
+        "rank": 2,
+        "score": 0.01639344262295082,
+        "agencyId": 40,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 354,
+            "chunkId": "c61771d433b5352beb09627dc45a11412997150bb4f26536d4ed4cab925c5d26",
+            "rank": 1
+          }
+        ]
+      },
+      {
+        "rank": 3,
+        "score": 0.01639344262295082,
+        "agencyId": 851,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 851,
+            "chunkId": "840f6eb182d4d1e661f4a8ac69bab57ac062ab46da70bbc114922a4281e7bdbb",
+            "rank": 1
+          }
+        ]
+      },
+      {
+        "rank": 4,
+        "score": 0.016129032258064516,
+        "agencyId": 888,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 888,
+            "chunkId": "f2d9169b3c37316e1453a9300feed07175771df0806ab22e6e2ea117def23de3",
+            "rank": 2
+          }
+        ]
+      },
+      {
+        "rank": 5,
+        "score": 0.016129032258064516,
+        "agencyId": 710,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6389,
+            "chunkId": "1836ad2bfdae99d115c311684423271dbc96d3bd6a51493d5cad851e2212616e",
+            "rank": 2
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6390,
+            "chunkId": "d5f0b25d8b30b755665aa1a342c90f7e11e996edb8f628490b0e1f670fbad87e",
+            "rank": 6
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6388,
+            "chunkId": "993a11d61d60f2b28dd53a8392a64408b4ca0f3d399d2a7b842f367c5766f73d",
+            "rank": 7
+          }
+        ]
+      },
+      {
+        "rank": 6,
+        "score": 0.015873015873015872,
+        "agencyId": 518,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 518,
+            "chunkId": "23161d375f4488be6b5246228965a3fead68537394a961592f4a0b52da3c2e47",
+            "rank": 3
+          }
+        ]
+      },
+      {
+        "rank": 7,
+        "score": 0.015873015873015872,
+        "agencyId": 750,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6744,
+            "chunkId": "648f41d41393d53f02190e8dfd314baef06b44bcf6c3a906c85aaa194c975f44",
+            "rank": 3
+          }
+        ]
+      },
+      {
+        "rank": 8,
+        "score": 0.015625,
+        "agencyId": 79,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 709,
+            "chunkId": "6a67d3b172f429af4aa669cad8fafff13ce70a6181c6f5fd810a881758eebd1a",
+            "rank": 4
+          }
+        ]
+      },
+      {
+        "rank": 9,
+        "score": 0.015625,
+        "agencyId": 222,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 222,
+            "chunkId": "fdc9caa1cbbfe243079b8d4e6f70ef0af40023ba3bfa9a1db10011bf9ae154d4",
+            "rank": 4
+          }
+        ]
+      },
+      {
+        "rank": 10,
+        "score": 0.015384615384615385,
+        "agencyId": 777,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 777,
+            "chunkId": "43dfec86357ea32aceba63f0dd140aa98a96c04512946d36fa1b5746ac28ce18",
+            "rank": 5
+          }
+        ]
+      }
+    ],
+    "text": [
+      {
+        "rank": 1,
+        "score": 0.03131881575727918,
+        "agencyId": 740,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 740,
+            "chunkId": "1a40b71d10a8d3af3592af9f73654b02ee640067f43b93b60bb1593c863efc79",
+            "rank": 1
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6660,
+            "chunkId": "02669bd56e10021b236e727cbdfd7d657ceaf0cdbdca3692723d1f58021c8c95",
+            "rank": 7
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6658,
+            "chunkId": "030d47fa8ef742e24edb82a71579e4b62f6cf1c81869bc3c2656b42fcaa1f7cd",
+            "rank": 9
+          }
+        ]
+      },
+      {
+        "rank": 2,
+        "score": 0.01639344262295082,
+        "agencyId": 500,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 4495,
+            "chunkId": "01724ef606707607e900e72bfae8d5e73d828f25fe622501d9a8dc37ad6e1aa9",
+            "rank": 1
+          }
+        ]
+      },
+      {
+        "rank": 3,
+        "score": 0.016129032258064516,
+        "agencyId": 814,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 814,
+            "chunkId": "222f600260d21b41d3119c5b0877e58862a320b48d74717e8fe442294aa0723b",
+            "rank": 2
+          }
+        ]
+      },
+      {
+        "rank": 4,
+        "score": 0.016129032258064516,
+        "agencyId": 240,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 2155,
+            "chunkId": "01dcfb8d4ff821c2ca9f70264277002647ca7347a60c4e3481cfc7ac336fc353",
+            "rank": 2
+          }
+        ]
+      },
+      {
+        "rank": 5,
+        "score": 0.015873015873015872,
+        "agencyId": 518,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 518,
+            "chunkId": "23161d375f4488be6b5246228965a3fead68537394a961592f4a0b52da3c2e47",
+            "rank": 3
+          }
+        ]
+      },
+      {
+        "rank": 6,
+        "score": 0.015873015873015872,
+        "agencyId": 700,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6299,
+            "chunkId": "01fd836d7a4844805da71e8b0b5a1e38e7a8e157dd0a6ca3b943b2fb6c2dd6ec",
+            "rank": 3
+          }
+        ]
+      },
+      {
+        "rank": 7,
+        "score": 0.015625,
+        "agencyId": 210,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 1890,
+            "chunkId": "02001ba89867651614f9a5d1a2ccbdd37254e2ef29cb6587330445cd2ce83c97",
+            "rank": 4
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 1889,
+            "chunkId": "04401f685c61ab4602333f5d34dc19f6ddfc35237c94293284e897dc25c85db7",
+            "rank": 12
+          }
+        ]
+      },
+      {
+        "rank": 8,
+        "score": 0.015625,
+        "agencyId": 444,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 444,
+            "chunkId": "33b7c37e8f20e12ed95e72c9e1b9a1252e7ba4da7f55b50e75318eafa9a3a011",
+            "rank": 4
+          }
+        ]
+      },
+      {
+        "rank": 9,
+        "score": 0.015384615384615385,
+        "agencyId": 333,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 333,
+            "chunkId": "3a374095434e23aae31245b9ab510266dc0502251012932b53002d722a47a6d0",
+            "rank": 5
+          }
+        ]
+      },
+      {
+        "rank": 10,
+        "score": 0.015384615384615385,
+        "agencyId": 70,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 626,
+            "chunkId": "022c060296ecd2a7ab1d03fc50d29f86f8dd9304ff6b8049bec62e7d49fd5580",
+            "rank": 5
+          }
+        ]
+      }
+    ],
+    "hybrid": [
+      {
+        "rank": 1,
+        "score": 0.05901171109723334,
+        "agencyId": 740,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 740,
+            "chunkId": "1a40b71d10a8d3af3592af9f73654b02ee640067f43b93b60bb1593c863efc79",
+            "rank": 2
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6660,
+            "chunkId": "02669bd56e10021b236e727cbdfd7d657ceaf0cdbdca3692723d1f58021c8c95",
+            "rank": 13
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6658,
+            "chunkId": "030d47fa8ef742e24edb82a71579e4b62f6cf1c81869bc3c2656b42fcaa1f7cd",
+            "rank": 17
+          }
+        ]
+      },
+      {
+        "rank": 2,
+        "score": 0.031746031746031744,
+        "agencyId": 518,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 518,
+            "chunkId": "23161d375f4488be6b5246228965a3fead68537394a961592f4a0b52da3c2e47",
+            "rank": 1
+          }
+        ]
+      },
+      {
+        "rank": 3,
+        "score": 0.030776515151515152,
+        "agencyId": 444,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 444,
+            "chunkId": "33b7c37e8f20e12ed95e72c9e1b9a1252e7ba4da7f55b50e75318eafa9a3a011",
+            "rank": 3
+          }
+        ]
+      },
+      {
+        "rank": 4,
+        "score": 0.030536130536130537,
+        "agencyId": 777,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 777,
+            "chunkId": "43dfec86357ea32aceba63f0dd140aa98a96c04512946d36fa1b5746ac28ce18",
+            "rank": 4
+          }
+        ]
+      },
+      {
+        "rank": 5,
+        "score": 0.03009207275993712,
+        "agencyId": 851,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 851,
+            "chunkId": "840f6eb182d4d1e661f4a8ac69bab57ac062ab46da70bbc114922a4281e7bdbb",
+            "rank": 5
+          }
+        ]
+      },
+      {
+        "rank": 6,
+        "score": 0.029857397504456328,
+        "agencyId": 520,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 4676,
+            "chunkId": "026593524977ce2db52e2c16c4744f1ce013a89e126424d35dd441a772c853e9",
+            "rank": 11
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 4679,
+            "chunkId": "f8028bb736adb3f89df32b7bc8ddb3b9b63212a9456dc5a16a8b0710fb338b78",
+            "rank": 24
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 4674,
+            "chunkId": "0d2930275920a97b38df8cd231cccdf780cb9510cf09c4c0086c44b2b600f2f2",
+            "rank": 75
+          }
+        ]
+      },
+      {
+        "rank": 7,
+        "score": 0.029726775956284153,
+        "agencyId": 40,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 354,
+            "chunkId": "c61771d433b5352beb09627dc45a11412997150bb4f26536d4ed4cab925c5d26",
+            "rank": 2
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 352,
+            "chunkId": "086dc86d38603be5ac8f36ce37787994726a1f31d8ccfbc125ff4905f970ee73",
+            "rank": 33
+          }
+        ]
+      },
+      {
+        "rank": 8,
+        "score": 0.029631255487269532,
+        "agencyId": 111,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Projection",
+              "sourceKind": "Agency",
+              "projection": "profile"
+            },
+            "documentKind": "Agency",
+            "documentId": 111,
+            "chunkId": "4956ac5b092779b92322ece6186e7d2f6a95c7cd6f0ac0145095d3fb593a0eaf",
+            "rank": 6
+          }
+        ]
+      },
+      {
+        "rank": 9,
+        "score": 0.029116045245077504,
+        "agencyId": 710,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6389,
+            "chunkId": "1836ad2bfdae99d115c311684423271dbc96d3bd6a51493d5cad851e2212616e",
+            "rank": 4
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6390,
+            "chunkId": "d5f0b25d8b30b755665aa1a342c90f7e11e996edb8f628490b0e1f670fbad87e",
+            "rank": 12
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 6388,
+            "chunkId": "993a11d61d60f2b28dd53a8392a64408b4ca0f3d399d2a7b842f367c5766f73d",
+            "rank": 14
+          }
+        ]
+      },
+      {
+        "rank": 10,
+        "score": 0.028814262023217248,
+        "agencyId": 910,
+        "evidence": [
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 8187,
+            "chunkId": "d5cb2c19a59aea9704e762305ea09be669750bb44bf3afdbe8f3a395f555d201",
+            "rank": 20
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 8185,
+            "chunkId": "3700531b450ce52d2f0db2b4a5fbf30273592778466925cb36d7149ab04bbc26",
+            "rank": 22
+          },
+          {
+            "route": {
+              "_tag": "Relation",
+              "sourceKind": "CaseStudy",
+              "projection": "evidence",
+              "relation": "deliveredBy",
+              "direction": "outgoing",
+              "targetKind": "Agency"
+            },
+            "documentKind": "CaseStudy",
+            "documentId": 8183,
+            "chunkId": "072a9ae943b11872fdcb4f9c66da5fdc235f36fabd4fecd047549609c43ee379",
+            "rank": 27
+          }
+        ]
+      }
+    ]
+  }
+}

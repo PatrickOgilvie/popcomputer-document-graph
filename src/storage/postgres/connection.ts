@@ -62,11 +62,15 @@ export type PostgresDocumentGraphConfig =
       readonly pool: Pool
       readonly transaction?: never
       readonly schema?: string
+      /** Auto uses installed pgvector for eligible vectors; float64 keeps array scoring. */
+      readonly vectorSearch?: "auto" | "float64"
     }
   | {
       readonly transaction: Client | PoolClient | PostgresQueryClient
       readonly pool?: never
       readonly schema?: string
+      /** Auto uses installed pgvector for eligible vectors; float64 keeps array scoring. */
+      readonly vectorSearch?: "auto" | "float64"
     }
 
 export type PostgresQueryable =

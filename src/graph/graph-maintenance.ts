@@ -1,16 +1,14 @@
 import { Effect } from "effect"
-import { ProjectionIndexStore } from "../indexing/projection-index.js"
 import {
-  GraphRelationStore,
-  type RegisteredGraphRelation,
-} from "./graph-relation.js"
+  ProjectionIndexStore,
+  type RegisteredGraphProjection,
+} from "../indexing/projection-index.js"
+import type { RegisteredGraphRelation } from "./graph-relation.js"
+import { GraphTopologyStore } from "./graph-topology.js"
 
 export interface ReconcileDocumentGraphWorkflowInput {
   readonly graph: string
-  readonly registeredProjections: ReadonlyArray<{
-    readonly documentKind: string
-    readonly projection: string
-  }>
+  readonly registeredProjections: ReadonlyArray<RegisteredGraphProjection>
   readonly registeredRelations: ReadonlyArray<RegisteredGraphRelation>
 }
 
@@ -23,14 +21,14 @@ export const reconcileDocumentGraphWorkflow = Effect.fn(
     graph: input.graph,
     registered: input.registeredProjections,
   })
-  const relationStore = yield* GraphRelationStore
-  const relationPrune = yield* relationStore.pruneRelations({
+  const topologyStore = yield* GraphTopologyStore
+  const topologyPrune = yield* topologyStore.pruneTopology({
     graph: input.graph,
     registered: input.registeredRelations,
   })
   return {
     deletedRevisions: projectionPrune.deletedRevisions,
     deletedChunks: projectionPrune.deletedChunks,
-    deletedRelations: relationPrune.deleted,
+    deletedRelations: topologyPrune.deletedRelations,
   }
 })

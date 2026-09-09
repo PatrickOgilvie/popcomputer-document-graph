@@ -1,4 +1,4 @@
-import { Context, Effect, Result, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import {
   type DocumentDefinitions,
   type DocumentId,
@@ -126,9 +126,11 @@ export interface ReplaceOutgoingGraphRelations {
 /** Structural reason a complete outgoing-relation replacement is invalid. */
 export type OutgoingGraphRelationReplacementIssue =
   | "source_graph_mismatch"
+  | "source_key_mismatch"
   | "duplicate_relation"
   | "target_graph_mismatch"
   | "target_kind_mismatch"
+  | "target_key_mismatch"
   | "duplicate_edge"
 
 /** One validated edge flattened from an outgoing relation replacement. */
@@ -161,6 +163,15 @@ export const planOutgoingGraphRelationReplacement = (
   if (replacement.source.graph !== replacement.graph) {
     return Result.fail("source_graph_mismatch")
   }
+  if (
+    makeDocumentKey({
+      graph: replacement.source.graph,
+      documentKind: replacement.source.kind,
+      encodedId: replacement.source.id,
+    }) !== replacement.sourceDocumentKey
+  ) {
+    return Result.fail("source_key_mismatch")
+  }
 
   const relationIds = new Set<string>()
   const identities = new Set<string>()
@@ -177,6 +188,15 @@ export const planOutgoingGraphRelationReplacement = (
       }
       if (target.reference.kind !== relation.targetDocumentKind) {
         return Result.fail("target_kind_mismatch")
+      }
+      if (
+        makeDocumentKey({
+          graph: target.reference.graph,
+          documentKind: target.reference.kind,
+          encodedId: target.reference.id,
+        }) !== target.documentKey
+      ) {
+        return Result.fail("target_key_mismatch")
       }
 
       const identity = makeGraphRelationEdgeIdentity({
@@ -387,28 +407,12 @@ export const countGraphRelationReplacement = (
   }
 }
 
-/** Idempotent result of deleting every edge touching one graph node. */
-export interface GraphRelationDeletion {
-  readonly deleted: number
-}
-
 /** One active relation retained while reconciling persisted graph edges. */
 export interface RegisteredGraphRelation {
   readonly id: string
   readonly version: string
   readonly sourceDocumentKind: string
   readonly targetDocumentKind: string
-}
-
-/** Command for pruning edges whose relation declaration is no longer active. */
-export interface PruneGraphRelations {
-  readonly graph: string
-  readonly registered: ReadonlyArray<RegisteredGraphRelation>
-}
-
-/** Result of pruning edges whose relation policy left the graph manifest. */
-export interface GraphRelationPrune {
-  readonly deleted: number
 }
 
 /** Bounded outgoing-neighbour request sent to a graph storage adapter. */
@@ -432,66 +436,3 @@ export interface FindIncomingGraphNeighbours {
   readonly sourceDocumentKind: string
   readonly limit: GraphNeighbourLimit
 }
-
-/** Persisted neighbour reference returned by a graph storage adapter. */
-export interface StoredGraphNeighbour {
-  readonly documentKey: DocumentKey
-  readonly reference: EncodedDocumentReference
-}
-
-/** Graph relation storage could not complete an operation. */
-export class GraphRelationStoreFailed extends Schema.TaggedError<
-  GraphRelationStoreFailed
->()("GraphRelationStoreFailed", {
-  operation: Schema.Literals([
-    "replace_outgoing",
-    "delete_node",
-    "prune_graph",
-    "find_outgoing",
-    "find_incoming",
-  ]),
-  reason: Schema.Literals(["unavailable", "invalid_stored_state"]),
-  cause: Schema.Unknown,
-}) {}
-
-/** A relation adapter returned neighbours outside its declared contract. */
-export class InvalidGraphNeighbourOutput extends Schema.TaggedError<
-  InvalidGraphNeighbourOutput
->()("InvalidGraphNeighbourOutput", {
-  reason: Schema.Literals(["too_many", "duplicate", "not_ordered"]),
-}) {}
-
-/** Persistence capability consumed by graph relation workflows. */
-export interface GraphRelationStoreService {
-  /** Atomically replace every outgoing relation declared for one source. */
-  readonly replaceOutgoing: (
-    replacement: ReplaceOutgoingGraphRelations,
-  ) => Effect.Effect<GraphRelationCommit, GraphRelationStoreFailed>
-
-  /** Idempotently delete every incoming and outgoing edge for one node. */
-  readonly deleteNode: (input: {
-    readonly graph: string
-    readonly documentKey: DocumentKey
-  }) => Effect.Effect<GraphRelationDeletion, GraphRelationStoreFailed>
-
-  /** Delete edges whose relation declaration is no longer registered. */
-  readonly pruneRelations: (
-    input: PruneGraphRelations,
-  ) => Effect.Effect<GraphRelationPrune, GraphRelationStoreFailed>
-
-  /** Find bounded, deterministically ordered outgoing neighbours. */
-  readonly findOutgoing: (
-    input: FindOutgoingGraphNeighbours,
-  ) => Effect.Effect<ReadonlyArray<StoredGraphNeighbour>, GraphRelationStoreFailed>
-
-  /** Find bounded, deterministically ordered incoming neighbours. */
-  readonly findIncoming: (
-    input: FindIncomingGraphNeighbours,
-  ) => Effect.Effect<ReadonlyArray<StoredGraphNeighbour>, GraphRelationStoreFailed>
-}
-
-/** Effect service tag for graph relation persistence and traversal. */
-export class GraphRelationStore extends Context.Service<
-  GraphRelationStore,
-  GraphRelationStoreService
->()("@popcomputer/document-graph/GraphRelationStore") {}

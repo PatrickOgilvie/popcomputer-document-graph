@@ -5,6 +5,13 @@
 - Scope: `GraphDocumentHandle.index`, projection persistence, relation
   persistence, embedding providers, and the PostgreSQL adapter
 
+> Superseded in part on 2026-08-28: `GraphRelationStore` became the
+> node-aware `GraphTopologyStore`, and D1-coordinated Turbopuffer publication
+> now provides a durable cross-store protocol for remote projection rows. The
+> original decision remains the historical basis for cohesive PostgreSQL and
+> independently atomic capabilities. See
+> [ADR 0002](./0002-workspace-d1-and-turbopuffer-storage.md).
+
 ## Context
 
 One document index operation can update several independently versioned vector
@@ -324,14 +331,23 @@ deferred capability shipped without becoming `DocumentGraphMutationStore`:
   Effect resolves embeddings and plans mutations with no storage writes.
 - The combinator returns the program result alongside a deterministically
   ordered, duplicate-checked mutation set (`DuplicatePreparedMutation` on
-  conflicting identities), projections before relation sets.
+  conflicting identities), projections before topology replacements.
 - `replayPreparedGraphMutation(prepared, target)` applies the set sequentially
   to the narrow `GraphMutationTarget` - pooled for convergent publication or
   transaction-scoped for all-or-nothing publication alongside application
-  rows. Replaying performs no network calls; optimistic tokens are
-  revalidated inside the target storage as before.
+  rows. Replaying performs no embedding calls; optimistic tokens are
+  revalidated inside the target storage as before. A remote target such as
+  Turbopuffer may still perform storage-provider network calls.
+- Durable workflows persist the canonical JSON returned by
+  `encodePreparedGraphMutation`. `decodePreparedGraphMutation` accepts only the
+  strict version-1 envelope, revalidates operation identities and projection /
+  topology invariants, then reconstructs the same copied, deeply frozen replay
+  value. Stored artifacts are therefore replay inputs, never instructions to
+  rerun projection or embedding work.
 
-Points 1-5 and 6 are satisfied by construction; point 7 is satisfied by
+Points 1-4 and 6 are satisfied by construction. Point 5 remains a composition
+rule for the cohesive PostgreSQL transaction mode rather than a universal
+replay guarantee. Point 7 is satisfied by
 behaviour tests proving capture writes nothing, replay equals direct indexing,
 replay performs no embedding calls, and replayed state equals directly indexed
 state through public retrieval seams. The fixed savepoint name in

@@ -14,7 +14,7 @@ import {
   defineDocumentGraph,
   defineEmbeddingProfile,
   EmbeddingProvider,
-  GraphRelationStore,
+  GraphTopologyStore,
   prepareGraphMutation,
   ProjectionIndexStore,
   ProjectionSearchStore,
@@ -77,10 +77,10 @@ const embeddings: EmbeddingProviderService = {
 const freshStorage: Effect.Effect<DocumentGraphStorageService> =
   Effect.gen(function* () {
     const projection = yield* ProjectionIndexStore
-    const relations = yield* GraphRelationStore
+    const topology = yield* GraphTopologyStore
     const semantic = yield* ProjectionSearchStore
     const text = yield* ProjectionTextSearchStore
-    return { ...projection, ...semantic, ...text, ...relations }
+    return { ...projection, ...semantic, ...text, ...topology }
   }).pipe(Effect.provide(inMemoryDocumentGraph()))
 
 const program = Effect.gen(function* () {

@@ -96,7 +96,11 @@ const migrateInSchema = async (
   pool: Pool,
   schema: string,
 ): Promise<void> => {
-  for (const file of ["0001_initial.sql", "0002_mutation_locks.sql"]) {
+  for (const file of [
+    "0001_initial.sql",
+    "0002_mutation_locks.sql",
+    "0003_graph_topology.sql", "0004_native_vector_eligibility.sql",
+  ]) {
     const migration = await readFile(
       new URL(`../migrations/postgres/${file}`, import.meta.url),
       "utf8",
@@ -277,6 +281,7 @@ describe("postgresDocumentGraph", () => {
               ),
               encodedTarget: staleRevision.encodedTarget,
               projectionVersion: staleRevision.projection.version,
+              textPolicy: staleRevision.textPolicy,
               revisionHash: staleRevision.revisionHash,
               embeddingProfile: profile,
               chunks: [
@@ -305,8 +310,8 @@ describe("postgresDocumentGraph", () => {
         expect(result.conformance.projectionIndex.capability).toBe(
           "projection_index",
         )
-        expect(result.conformance.graphRelations.capability).toBe(
-          "graph_relations",
+        expect(result.conformance.graphTopology.capability).toBe(
+          "graph_topology",
         )
         expect(result.conformance.retrieval.map((report) => report.channel)).toEqual([
           "semantic",
@@ -540,6 +545,7 @@ describe("postgresDocumentGraph", () => {
               expectedToken: Option.none(),
               encodedTarget: retiredRevision.encodedTarget,
               projectionVersion: "v1",
+              textPolicy: retiredRevision.textPolicy,
               revisionHash: retiredRevision.revisionHash,
               embeddingProfile: profile,
               chunks: [

@@ -139,6 +139,7 @@ export const makeProjectionIndexStoreConformanceFixture =
       expectedToken: Option.none(),
       encodedTarget,
       projectionVersion: ProjectionVersion,
+      textPolicy: "disabled",
       revisionHash: initialRevisionHash,
       embeddingProfile: profile,
       chunks: initialChunks,
@@ -169,6 +170,7 @@ export const makeProjectionIndexStoreConformanceFixture =
       expectedToken: Option.none(),
       encodedTarget,
       projectionVersion: ProjectionVersion,
+      textPolicy: "disabled",
       revisionHash: retiredRevisionHash,
       embeddingProfile: profile,
       chunks: [
@@ -476,7 +478,33 @@ export const verifyProjectionIndexStoreConformance = () =>
       return yield* Effect.fail(violation("ordered_batch_lookup"))
     }
 
-    yield* store.deleteRevision(fixture.initial.key)
+    // A versioned declaration must not retain an older revision. An omitted
+    // version remains a wildcard independently of other catalog entries.
+    yield* store.replaceRevision(fixture.retired)
+    const versionPrune = yield* store.pruneGraph({
+      graph: GraphId,
+      registered: [
+        {
+          documentKind: DocumentKind,
+          projection: ProjectionId,
+          projectionVersion: "v2",
+        },
+        { documentKind: DocumentKind, projection: fixture.retired.key.projection },
+      ],
+    })
+    const [outdated, retained] = yield* store.loadRevisions([
+      fixture.initial.key,
+      fixture.retired.key,
+    ])
+    if (
+      versionPrune.deletedRevisions !== 1 ||
+      versionPrune.deletedChunks !== 2 ||
+      outdated === undefined || Option.isSome(outdated.revision) ||
+      retained === undefined || Option.isNone(retained.revision)
+    ) {
+      return yield* Effect.fail(violation("schema_pruning"))
+    }
+    yield* store.deleteRevision(fixture.retired.key)
 
     return {
       capability: "projection_index" as const,

@@ -1,5 +1,137 @@
 # Changelog
 
+## 0.4.0 - 2026-09-09
+
+Faster graph retrieval, automatic PostgreSQL native vector scoring, and
+Cloudflare D1 + Turbopuffer storage. Agency profiles and related CaseStudy
+evidence continue to contribute independently to retrieval results.
+
+### Performance
+
+- On the local 10,000-document Agency/CaseStudy fixture, native PostgreSQL
+  hybrid retrieval improved from 1,074.9 ms to 106.6 ms (10.1×), and lexical
+  retrieval from 24.8 ms to 11.1 ms (2.2×). Hybrid database calls fell from 104
+  to five retrieval statements plus an initial capability lookup. These are
+  synthetic measurements excluding embedding API latency; see the
+  [benchmark report](./docs/experiments/agency-retrieval-production-2026-09-07.md).
+- Graph retrieval batches relationship expansion in groups of 100 source
+  documents across PostgreSQL, D1 and in-memory adapters. Per-source limits,
+  input identity, ordering and evidence provenance are preserved.
+- PostgreSQL automatically uses installed pgvector for eligible vectors and
+  falls back to extension-free float64 scoring. `vectorSearch: "float64"`
+  explicitly retains float64 scoring throughout. Native scores use float32
+  precision and can reorder near ties; both paths remain exhaustive.
+- PostgreSQL float64 cosine search expands vectors together and computes the
+  query norm once. Plain-text ranking reuses stored full-text vectors while
+  attributed text retains its separate field weights.
+- PostgreSQL document-key search targets use the native indexed key type.
+  Topology replacements batch source and target nodes in a consistent lock
+  order and restrict orphan cleanup to former targets.
+- Turbopuffer replacements that supply every vector skip the previous
+  revision's vector download. D1 publication cleanup only scans mutation
+  history for the affected document projection.
+
+### Fixed
+
+- Concurrent Turbopuffer retries retain their shared publication lease when
+  one request is rejected, allowing another in-flight attempt to finalize.
+- Default node listing filters to currently registered document kinds,
+  including after retired kinds leave materialized nodes in storage.
+- Automatic pgvector selection falls back when the executing database role
+  cannot access the extension's schema, types or required functions.
+- PostgreSQL orphan cleanup locks candidates without waiting on concurrent
+  publishers and rechecks references before deletion, preventing a stale
+  snapshot from cascading away newly committed edges. Explicit node deletion
+  locks the node before counting its incident edges.
+- PostgreSQL reconciliation removes obsolete projection versions, and mixed
+  versioned/unversioned catalogs retain each entry's own search constraint.
+- D1 committed replay returns the original persisted commit counts.
+- Turbopuffer mutation identities distinguish absent metadata from explicit
+  JSON null.
+
+### Breaking changes
+
+- Search queries are limited to 8,192 characters across retrieval channels.
+- Replaced the edge-only `GraphRelationStore` adapter contract with
+  `GraphTopologyStore`. Topology adapters now persist canonical referenced and
+  materialized nodes as well as directed relations, support bounded node pages,
+  resolve related node populations, hard-delete incident topology, and collect
+  orphan referenced nodes during reconciliation. `findRelatedNodes` takes
+  `documentKeys` and returns ordered `RelatedGraphNodeSet` groups, including
+  empty and duplicate requests, with an independent limit per source.
+- Projection replacements now carry their `TextSearchPolicy`, and registered
+  projection catalog entries carry the projection version. Custom
+  `ProjectionIndexStore` implementations must retain those fields when
+  publishing and pruning revisions.
+- Relation-constrained `searchWithin` requires an explicit `maximumDocuments`
+  bound because topology selects the eligible population before ranking.
+- Prepared mutation replay can perform storage-provider network calls. Its
+  guarantee is that captured vectors are reused and embeddings are not
+  recomputed; it is not an offline replay guarantee.
+- `makeTurbopufferWorkspacePartition` now requires a stable, non-secret
+  provider deployment ID and an explicit regional or custom endpoint. The
+  official client derives placement exclusively from that partition rather
+  than accepting independent `region` or `baseURL` settings. Custom endpoints
+  must use HTTPS.
+
+### Added
+
+- Cloudflare D1 graph topology adapter and fixed normalized migrations under
+  `migrations/d1`.
+- D1 projection publication coordinator with durable logical snapshots,
+  optimistic compare-and-set, monotonically increasing generation leases,
+  slot high-water tracking, mutation inventory, and bounded publication
+  journaling.
+  Expired diagnostic deadlines do not transfer authority to a competing
+  mutation; the exact prepared mutation must reconcile or provider fencing
+  must prove its lease can no longer write before it is superseded.
+- Turbopuffer adapter foundations built on the official SDK: explicit schema
+  generations, stable marker/slot identities, plaintext and attributed chunk
+  rows, external-vector reuse, metadata-term filters, cosine ANN, weighted BM25,
+  and same-snapshot hybrid multi-query.
+- Closed graph search targets: `AllDocuments`, `NoDocuments`, and non-empty
+  `DocumentKeys`. Every adapter must apply the target before candidate limits;
+  `NoDocuments` short-circuits without a provider request.
+- Optional `ProjectionHybridSearchStore` capability. Providers that can execute
+  both channels against one snapshot may return separate semantic and lexical
+  candidates while the package continues to own validation, signals, and
+  reciprocal-rank fusion.
+- PostgreSQL migrations `0003_graph_topology.sql` for canonical nodes and
+  `0004_native_vector_eligibility.sql` for generated native-scoring eligibility.
+  Apply both before using the updated adapter. Existing canonical embeddings
+  remain float64 and do not need to be recomputed.
+- D1 and Turbopuffer public entry points, focused protocol tests, and
+  [ADR 0002](./docs/decisions/0002-workspace-d1-and-turbopuffer-storage.md)
+  describing the workspace storage model.
+- A complete exported `d1DocumentGraphSchema` under the deliberately
+  Drizzle-coupled `@popcomputer/document-graph/d1/schema` entry point for
+  composing all package-owned topology and publication tables.
+- `makeTurbopufferD1Workspace`, a deep composition facade that derives one
+  partition and wires embeddings, D1 topology/publication, and Turbopuffer
+  indexing and semantic, lexical, and hybrid retrieval capabilities.
+- Provider-aware Turbopuffer retry directives with aggregate write-outcome
+  safety, provider dimension/request/document/attribute/filterable/query
+  limits, and an opt-in disposable live conformance suite exposed through
+  `test:live:turbopuffer`.
+- Runtime-decoded query consistency and explicit credential precedence over
+  ambient SDK custom Authorization headers.
+- A strict version-1 `PreparedGraphMutationArtifact` codec for durable workflow
+  checkpoints. It emits canonical JSON, validates projection and topology
+  invariants on both encode and decode, and restores the existing deeply frozen
+  replay value without recomputing embeddings.
+
+### Changed
+
+- Indexing materializes a source graph node even when it has no outgoing edges.
+  Relation targets begin as referenced nodes and are upgraded, never
+  downgraded, when their own documents are indexed.
+- In-memory and PostgreSQL semantic/text adapters enforce document-key targets
+  before result limiting.
+- Graph manifests and stale-revision pruning distinguish projection policy
+  versions.
+- Removal and reconciliation preserve the existing public result shapes while
+  topology adapters retain their more detailed node deletion counts.
+
 ## 0.3.0 - 2026-08-22
 
 ### Breaking changes

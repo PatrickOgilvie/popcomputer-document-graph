@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Result } from "effect"
 import {
   evaluateMetadataFilter,
-  GraphRelationStore,
+  GraphTopologyStore,
   ProjectionIndexStore,
   ProjectionIndexStoreFailed,
   ProjectionTextSearchStore,
-  type GraphRelationStoreService,
+  type GraphTopologyStoreService,
   type ProjectionIndexStoreService,
   type ProjectionTextSearchStoreService,
   type TextSearchCandidate,
@@ -15,7 +15,7 @@ import { inMemoryDocumentGraph } from "../src/in-memory.js"
 import {
   makeSearchStoreConformanceFixture,
   verifyDocumentGraphStorageConformance,
-  verifyGraphRelationStoreConformance,
+  verifyGraphTopologyStoreConformance,
   verifyProjectionIndexStoreConformance,
   verifySearchStoreConformance,
   verifyTextSearchStoreConformance,
@@ -55,15 +55,20 @@ describe("adapter conformance", () => {
 
     expect(report.projectionIndex.capability).toBe("projection_index")
     expect(report.projectionIndex.verified).toHaveLength(9)
-    expect(report.graphRelations).toEqual({
-      capability: "graph_relations",
+    expect(report.graphTopology).toEqual({
+      capability: "graph_topology",
       verified: [
+        "empty_source_materialization",
+        "referenced_target_creation",
+        "materialized_promotion",
         "complete_replacement",
         "bidirectional_traversal",
         "bounded_ordering",
-        "stale_edge_deletion",
+        "batch_bounds_and_identity",
+        "orphan_reference_collection",
         "invalid_replacement_atomicity",
         "idempotent_node_deletion",
+        "hard_deletion_orphan_collection",
         "schema_pruning",
       ],
     })
@@ -187,24 +192,24 @@ describe("adapter conformance", () => {
     }
   })
 
-  test("rejects a relation adapter with unstable bounded ordering", async () => {
+  test("rejects a topology adapter with unstable bounded ordering", async () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
-        const correct = yield* GraphRelationStore
-        const broken: GraphRelationStoreService = {
+        const correct = yield* GraphTopologyStore
+        const broken: GraphTopologyStoreService = {
           ...correct,
-          findOutgoing: (request) =>
-            correct.findOutgoing(request).pipe(
-              Effect.map((neighbours) =>
+          findRelatedNodes: (request) =>
+            correct.findRelatedNodes(request).pipe(
+              Effect.map((nodes) =>
                 request.limit === 2
-                  ? [...neighbours].reverse()
-                  : neighbours,
+                  ? nodes.map((group) => ({ ...group, nodes: [...group.nodes].reverse() }))
+                  : nodes,
               ),
             ),
         }
 
-        return yield* verifyGraphRelationStoreConformance().pipe(
-          Effect.provideService(GraphRelationStore, broken),
+        return yield* verifyGraphTopologyStoreConformance().pipe(
+          Effect.provideService(GraphTopologyStore, broken),
           Effect.result,
         )
       }).pipe(Effect.provide(inMemoryDocumentGraph())),
@@ -213,11 +218,11 @@ describe("adapter conformance", () => {
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe(
-        "GraphRelationStoreConformanceViolation",
+        "GraphTopologyStoreConformanceViolation",
       )
       if (
         result.failure._tag ===
-        "GraphRelationStoreConformanceViolation"
+        "GraphTopologyStoreConformanceViolation"
       ) {
         expect(result.failure.law).toBe("bounded_ordering")
       }

@@ -14,7 +14,10 @@ import type {
   DocumentKey,
   ProjectionRevisionHash,
 } from "../document/document-identity.js"
-import type { ProjectedText } from "../document/text-search-policy.js"
+import type {
+  ProjectedText,
+  TextSearchPolicy,
+} from "../document/text-search-policy.js"
 import {
   EmbeddingProvider,
   InvalidEmbeddingOutput,
@@ -83,6 +86,7 @@ export interface ReplaceProjectedRevision {
   readonly expectedToken: Option.Option<IndexRevisionToken>
   readonly encodedTarget: EncodedDocumentReference
   readonly projectionVersion: string
+  readonly textPolicy: TextSearchPolicy
   readonly revisionHash: ProjectionRevisionHash
   readonly embeddingProfile: EmbeddingProfile
   readonly chunks: readonly [
@@ -250,6 +254,7 @@ export interface ProjectionIndexDeletion {
 export interface RegisteredGraphProjection {
   readonly documentKind: string
   readonly projection: string
+  readonly projectionVersion?: string
 }
 
 /** Command for pruning stored projections no longer registered by a graph. */
@@ -274,7 +279,14 @@ export class ProjectionIndexStoreFailed extends Schema.TaggedError<
     "delete_revision",
     "prune_graph",
   ]),
-  reason: Schema.Literals(["unavailable", "invalid_stored_state"]),
+  reason: Schema.Literals([
+    "unavailable",
+    "invalid_stored_state",
+    "invalid_replacement",
+    "capacity_exceeded",
+    "publication_in_progress",
+    "publication_in_doubt",
+  ]),
   cause: Schema.Unknown,
 }) {}
 
@@ -353,6 +365,7 @@ export interface IndexableProjectedRevision {
     readonly id: string
     readonly version: string
   }
+  readonly textPolicy: TextSearchPolicy
   readonly revisionHash: ProjectionRevisionHash
   readonly chunks: readonly [
     IndexableProjectedChunk,
@@ -566,6 +579,7 @@ export const indexProjectedRevision: (
       expectedToken: Option.map(current, (snapshot) => snapshot.token),
       encodedTarget: revision.encodedTarget,
       projectionVersion: revision.projection.version,
+      textPolicy: revision.textPolicy,
       revisionHash: revision.revisionHash,
       embeddingProfile: embeddings.profile,
       chunks: EffectArray.map(revision.chunks, projectChunkRecord),

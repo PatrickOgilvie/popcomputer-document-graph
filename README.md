@@ -17,9 +17,9 @@ const hits = yield* ArticleContent.search(
 )
 ```
 
-The package includes PostgreSQL and in-memory storage. Applications retain
-control of embedding providers, source documents, authorization, and public
-response shapes.
+The package includes PostgreSQL, Cloudflare D1 + Turbopuffer, and in-memory
+storage. Applications retain control of embedding providers, canonical source
+documents and files, authorization, and public response shapes.
 
 ## Features
 
@@ -27,13 +27,17 @@ response shapes.
 - Typed document, projection, relation, and retrieval handles
 - Semantic, full-text, and reciprocal-rank-fused hybrid search
 - Complete-revision delta indexing with embedding reuse
-- Prepared-mutation capture and replay for all-or-nothing publication
+- Prepared-mutation capture and replay for deterministic publication retries
 - Post-search evidence currency verification
 - Schema-defined metadata filters and graph search scopes
 - Target-oriented retrieval across direct and related evidence
 - Typed incoming and outgoing neighbour traversal
+- Canonical referenced/materialized graph nodes with bounded catalog queries
+- D1-first, Turbopuffer-second graph-constrained retrieval
 - Per-document custom chunking with section-level attribution
 - PostgreSQL storage with no required extensions
+- Workspace-local D1 topology and publication coordination
+- Turbopuffer plaintext, vector, BM25, and metadata-filter retrieval
 - In-memory storage and backend conformance suites
 - Typed Effect failures and safe tracing attributes
 
@@ -51,9 +55,18 @@ together. `pg` is needed when composing the included PostgreSQL adapter.
 For PostgreSQL, apply
 [`migrations/postgres/0001_initial.sql`](./migrations/postgres/0001_initial.sql)
 and
-[`migrations/postgres/0002_mutation_locks.sql`](./migrations/postgres/0002_mutation_locks.sql)
+[`migrations/postgres/0002_mutation_locks.sql`](./migrations/postgres/0002_mutation_locks.sql),
+then
+[`migrations/postgres/0003_graph_topology.sql`](./migrations/postgres/0003_graph_topology.sql)
+and
+[`migrations/postgres/0004_native_vector_eligibility.sql`](./migrations/postgres/0004_native_vector_eligibility.sql)
 with the application's migration tool. The runtime never modifies the database
 schema.
+
+For a workspace-local Cloudflare deployment, apply the ordered migrations in
+[`migrations/d1`](./migrations/d1) to that workspace's D1 database. The
+Turbopuffer adapter uses the official SDK and creates the pinned retrieval
+schema as part of the inaugural atomic publication.
 
 ## Quick start
 
@@ -454,6 +467,8 @@ versions. Coordinate each change with the affected reindex. When a projection
 or relation ID is removed or renamed, reindex the active definitions and run
 `KnowledgeGraph.reconcileIndex()` to prune storage belonging to definitions
 that are no longer registered.
+Reconciliation also removes stored revisions whose projection version no
+longer matches the current definition.
 
 ## Search
 
@@ -676,20 +691,26 @@ an opaque entity score.
 can define `FindProducts`, `FindExperts`, or `FindArticles` from their own graph.
 Illegal relation names, source kinds, and target kinds fail during authoring.
 
+Each route discovers its own candidates before target ranking is fused. Agency
+profiles and related Work evidence can therefore each introduce a relevant
+Agency. Relationship expansion groups up to 100 distinct source documents into
+one adapter read, preserving an independent `neighboursPerSource` bound for
+every document. Larger populations use successive bounded batches.
+
 The full graph is typechecked in
 [`examples/site-graph.ts`](./examples/site-graph.ts).
 
-### Neighbour traversal
+### Topology queries and relation-constrained search
 
 Relations also work without search:
 
 ```ts
-const agencies = yield* WorkNode.neighbours(work.id, {
+const agencies = yield* WorkNode.relatedNodes(work.id, {
   via: "deliveredBy",
   limit: 25,
 })
 
-const work = yield* AgencyNode.neighbours(agency.id, {
+const work = yield* AgencyNode.relatedNodes(agency.id, {
   via: "deliveredBy",
   direction: "incoming",
   limit: 25,
@@ -700,6 +721,40 @@ Relations are stored in their declared direction and may be read in reverse.
 Traversal returns typed document references; loading and authorizing source
 documents remains an application responsibility. Limits default to 100 and are
 bounded to 1,000.
+
+The graph also exposes a bounded canonical node catalog:
+
+```ts
+const page = yield* SiteGraph.nodes({
+  include: ["Agency"],
+  states: ["Materialized"],
+  limit: 100,
+})
+```
+
+For the exact D1-then-Turbopuffer pattern, resolve a relation and search only
+inside the resulting population:
+
+```ts
+const matchingAgencies = yield* WorkNode.searchWithin(
+  work.id,
+  "enterprise authentication specialists",
+  {
+    via: "deliveredBy",
+    maximumDocuments: 250,
+    search: { limit: 10 },
+  },
+)
+```
+
+`searchWithin` first asks canonical topology for related document keys. It then
+passes a closed `NoDocuments` or non-empty `DocumentKeys` target to the search
+adapter. Turbopuffer places that target in both ANN and BM25 filters before
+`top_k`; it never searches globally and filters an already-limited result set.
+An empty topology result performs no embedding or provider query.
+`maximumDocuments` is required because topology applies that deterministic
+key-ordered bound before ranking; choose it as an explicit recall and
+provider-filter-size tradeoff.
 
 ### Evidence currency
 
@@ -927,10 +982,12 @@ yield* replayPreparedGraphMutation(mutation, transactionScopedStorage)
 
 Preparation returns the indexing result alongside the mutation and rejects two
 mutations claiming the same identity with
-`DuplicatePreparedMutation`, orders projections before relation sets, and
-performs no storage writes during capture. Replay performs no network calls:
-every vector was resolved before capture. Its target needs only
-`replaceRevision` and `replaceOutgoing`, rather than the complete storage API. See
+`DuplicatePreparedMutation`, orders projections before topology replacements,
+and performs no storage writes during capture. Replay performs no embedding
+calls because every vector was resolved before capture. A remote adapter may
+still call its storage provider while replaying the frozen payload. Its target
+needs only `replaceRevision` and `replaceDocumentTopology`, rather than the
+complete storage API. See
 [`examples/atomic-publication.ts`](./examples/atomic-publication.ts) for a
 compile-checked walkthrough.
 
@@ -962,6 +1019,89 @@ production adapter, but it is neither durable nor a performance simulator.
 Embedding providers remain separate from storage. A model change does not
 require a PostgreSQL adapter change, and a storage change does not alter source
 projection code.
+
+### Workspace D1 + Turbopuffer composition
+
+The Cloudflare adapter deliberately composes two data-plane stores:
+
+```text
+R2-backed application filesystem  canonical files and blobs
+                 |
+                 v
+document projection + external embeddings
+        |                         |
+        v                         v
+workspace D1                 Turbopuffer
+nodes + edges                text + vectors + BM25
+publication CAS/journal      metadata filters + ranked chunks
+```
+
+D1 answers exact topology questions. Turbopuffer ranks only the population D1
+resolved. PlanetScale can remain the platform control plane for workspaces,
+ownership, deployment state, and quotas; it is not required in the package's
+data-plane Layer.
+
+```ts
+import { Redacted } from "effect"
+import { makeTurbopufferD1Workspace } from
+  "@popcomputer/document-graph/turbopuffer"
+
+const WorkspaceDataPlane = makeTurbopufferD1Workspace({
+  workspace: workspace.id,
+  database: env.WORKSPACE_DB,
+  embeddings,
+  turbopuffer: {
+    apiKey: Redacted.make(env.TURBOPUFFER_API_KEY),
+    deploymentId: workspace.turbopufferDeploymentId,
+    endpoint: {
+      _tag: "Region",
+      region: workspace.turbopufferRegion,
+    },
+    schemaGeneration: 1,
+  },
+})
+
+const WorkspaceGraphLive = WorkspaceDataPlane.layer
+```
+
+The facade derives one physical partition and uses it for the SDK endpoint,
+namespace, D1 generation, publication rows, and retrieval filters. It exposes
+the partition separately for safe administration and diagnostics, while the
+application Layer contains only embeddings, topology, index, and search
+capabilities. The provider client and publication coordinator stay internal.
+
+Apply both D1 migrations before building the Layer. One D1 database may retain
+side-by-side publication heads for different `indexGeneration` values during a
+namespace or embedding-profile rollout. The active platform pointer chooses
+which composed Layer serves traffic.
+
+Applications using Drizzle can import `d1DocumentGraphSchema` from the
+deliberately Drizzle-coupled `@popcomputer/document-graph/d1/schema` entry
+point. It contains the topology, mutation inventory, publication-head, and
+journal tables created by those migrations.
+
+The adapter uses stable physical slots for each document projection. Every
+publication writes a marker, every live chunk, and tombstones through the
+historical slot high-water mark under one conditional Turbopuffer write. D1
+allocates monotonically increasing generations and keeps the pending journal.
+A timeout is reconciled by a strong marker read; it is never treated as proof
+of either success or failure. See
+[`ADR 0002`](./docs/decisions/0002-workspace-d1-and-turbopuffer-storage.md)
+for the complete protocol and failure table.
+The same composition is typechecked in
+[`examples/cloudflare-workspace.ts`](./examples/cloudflare-workspace.ts).
+
+An opt-in live provider contract covers schema creation, upsert, strong ANN and
+BM25 multi-query reads, overwrite, deletion, and disposable-namespace cleanup:
+
+```sh
+bun run test:live:turbopuffer
+```
+
+The command requires `TURBOPUFFER_API_KEY`,
+`TURBOPUFFER_DEPLOYMENT_ID`, and exactly one of `TURBOPUFFER_REGION` or
+`TURBOPUFFER_BASE_URL`. The default test and verification commands do not make
+network requests, and credentials remain redacted at the test boundary.
 
 ## Grounding
 
@@ -1054,10 +1194,13 @@ The adapter uses the SQL namespace created by the included migration. Supply a
 
 The included PostgreSQL implementation:
 
-- stores embeddings as `double precision[]`;
-- performs exact cosine similarity after graph, projection, metadata, and
-  embedding-profile filters;
-- uses PostgreSQL full-text search for lexical candidates;
+- stores canonical embeddings as `double precision[]`;
+- automatically uses installed pgvector for eligible vectors, with an
+  extension-free float64 cosine fallback;
+- scores every chunk eligible under graph, projection, metadata and embedding
+  profile filters, then applies deterministic candidate limits;
+- reuses stored full-text vectors for plain text and preserves separate field
+  weights for attributed text;
 - applies scope before candidate limits;
 - protects complete revision replacement with transactions, exact-key row
   locks on a dedicated `mutation_locks` table, and optimistic tokens;
@@ -1065,16 +1208,71 @@ The included PostgreSQL implementation:
 - requires no PostgreSQL extension.
 
 Mutation serialization takes transaction-scoped row locks keyed by mutation
-kind and exact document identity instead of advisory locks, so concurrent
-writers block only when they mutate the same scope and the adapter works
-through Cloudflare Hyperdrive and other proxies that do not support advisory
-lock functions.
+kind and exact document identity. Topology writes also lock shared source and
+target nodes in document-key order. These locks work through Cloudflare
+Hyperdrive and other proxies that do not support advisory lock functions.
+Orphan cleanup skips nodes held by concurrent writers; a later
+`reconcileIndex()` collects any remaining orphan references.
 
-Exact vector scans provide a predictable zero-configuration baseline for
-moderate corpora. Measure representative query latency before selecting an
-approximate vector adapter for larger datasets.
+`vectorSearch` defaults to `"auto"`. The adapter discovers pgvector in its
+installed schema, verifies the executing role's access to the schema, vector
+type, distance function and array cast, and shares the lookup across concurrent
+searches. An inaccessible extension uses the float64 fallback. Successful
+lookups, including absence, are cached for five minutes per built storage
+layer. Failed discovery is returned as a typed storage failure and is not
+cached. The runtime never installs an extension.
+
+Migration `0004_native_vector_eligibility.sql` adds a generated eligibility
+flag computed when an embedding is written. Canonical vectors retain their
+float64 precision. Native scoring uses pgvector's float32 representation, so
+scores and the order of near ties can differ. Zero vectors, vectors above
+16,000 dimensions, and extreme magnitudes use float64 scoring. For callers
+requiring float64 scores throughout, set:
+
+```ts
+const StorageLive = postgresDocumentGraph({ pool, vectorSearch: "float64" })
+```
+
+Both paths perform exhaustive cosine search. The float64 path calculates the
+query norm once per search. Measure representative latency before selecting
+an approximate vector adapter for larger datasets.
+
+The repository includes a reproducible comparison of the previous cosine
+query and the optimized query, plus document-key filtering:
+
+```sh
+bun run build
+TEST_DATABASE_URL=postgresql://localhost/document_graph_test \
+  node benchmarks/postgres-semantic.mjs
+```
+
+The benchmark uses temporary synthetic data and rolls it back. It measures
+database execution time; production latency also includes embedding and
+network time. See the [0.4.0 review](./docs/reviews/0.4.0.md) for results and
+verification limits.
+
+For the complete Agency-profile plus Work-evidence retrieval workflow:
+
+```sh
+bun run build
+TEST_DATABASE_URL=postgresql://localhost/document_graph_test \
+  node benchmarks/postgres-agency-production.mjs
+```
+
+This compares `auto` and `float64` through the public graph API. On a disposable
+server with pgvector's extension files available, `BENCHMARK_ENABLE_PGVECTOR=true`
+creates the extension inside the benchmark's rolled-back transaction. An
+optional `BENCHMARK_BASELINE_PACKAGE` points to an unpacked earlier package for
+before/after measurement. See the [production results](./docs/experiments/agency-retrieval-production-2026-09-07.md).
 
 ## Adapter authors
+
+`GraphTopologyStore.findRelatedNodes` accepts `documentKeys` and returns one
+`RelatedGraphNodeSet` for each input position. Preserve input order, duplicate
+keys and empty neighbour sets. Within each group, return unique nodes ordered
+by document key, with `limit` applied independently to that source. Empty input
+returns an empty array. Core workflows validate these guarantees before using
+relations as retrieval evidence.
 
 Low-level contracts are isolated behind the adapter entry point:
 
@@ -1112,10 +1310,11 @@ const report = await Effect.runPromise(
 ```
 
 The suite covers complete replacement, snapshot inventories, vector reuse,
-optimistic conflicts, invalid-write atomicity, stale deletion, graph pruning,
-bidirectional traversal, bounded ordering, scope-before-limit, score ordering,
-candidate uniqueness, stable ties, and repeatability. Run it against an
-isolated database or disposable schema.
+optimistic conflicts, invalid-write atomicity, stale deletion, referenced and
+materialized node state, graph pruning, bidirectional traversal, bounded
+ordering, scope-before-limit, score ordering, candidate uniqueness, stable
+ties, and repeatability. Run it against an isolated database or disposable
+schema.
 
 ## Current boundaries
 
@@ -1123,7 +1322,15 @@ isolated database or disposable schema.
   and hybrid strategies.
 - PostgreSQL vector search is exact and does not include an ANN index.
 - Graph retrieval composes direct and one-relation routes. Neighbour traversal
-  is available, but there is no universal multi-hop path-search API.
+  and relation-constrained `searchWithin` are available, but there is no
+  universal multi-hop path-search API.
+- Explicit Turbopuffer document-key targets are bounded to 10,000 keys. Very
+  large graph populations will need a future materialized-scope strategy.
+- The Turbopuffer adapter uses external embeddings for its first release;
+  provider-managed embedding remains a future optional adapter mode.
+- D1 and Turbopuffer converge through a durable publication protocol rather
+  than a distributed transaction. Durable indexing jobs must retry pending
+  prepared mutations.
 - Fuzzy typo-tolerant retrieval is not currently included.
 - Sections, rather than universal source spans, are the attribution boundary.
 - Source hydration, application authorization, and public response shaping
@@ -1141,6 +1348,9 @@ engines without obscuring application-owned policy.
 | Entry point | Intended use |
 |---|---|
 | `@popcomputer/document-graph` | Document schemas and application operations |
+| `@popcomputer/document-graph/d1` | Workspace topology and TP publication coordination |
+| `@popcomputer/document-graph/d1/schema` | Optional Drizzle declarations for package-owned D1 tables |
+| `@popcomputer/document-graph/turbopuffer` | TP client, indexing, search, schema, and administration |
 | `@popcomputer/document-graph/postgres` | PostgreSQL composition roots |
 | `@popcomputer/document-graph/in-memory` | Tests and local tools |
 | `@popcomputer/document-graph/adapter` | Storage adapter implementations |
@@ -1157,6 +1367,10 @@ bun run verify
 behavioural tests, a production build, and Node ESM entry-point checks. The
 PostgreSQL integration suite runs when both
 `RUN_DOCUMENT_GRAPH_POSTGRES_TESTS=true` and `TEST_DATABASE_URL` are set.
+`RUN_DOCUMENT_GRAPH_PGVECTOR_TESTS=true` additionally runs the native-scoring
+suite against a disposable database whose server has pgvector extension files.
+That suite creates its extension and fixtures transactionally and rolls them
+back, including a namespace containing punctuation and a quote.
 
 ## License
 

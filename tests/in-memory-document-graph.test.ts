@@ -5,8 +5,8 @@ import {
   defineDocumentGraph,
   defineEmbeddingProfile,
   EmbeddingProvider,
-  GraphRelationStore,
-  GraphRelationStoreFailed,
+  GraphTopologyStore,
+  GraphTopologyStoreFailed,
   ProjectionIndexConflict,
   ProjectionIndexStore,
   ProjectionIndexStoreFailed,
@@ -344,6 +344,7 @@ describe("inMemoryDocumentGraph", () => {
           expectedToken: Option.none(),
           encodedTarget: revision.encodedTarget,
           projectionVersion: "v1",
+          textPolicy: revision.textPolicy,
           revisionHash: revision.revisionHash,
           embeddingProfile: profile,
           chunks: [
@@ -416,6 +417,7 @@ describe("inMemoryDocumentGraph", () => {
             expectedToken: Option.none(),
             encodedTarget: revision.encodedTarget,
             projectionVersion: revision.projection.version,
+            textPolicy: revision.textPolicy,
             revisionHash: revision.revisionHash,
             embeddingProfile: profile,
             chunks,
@@ -467,6 +469,7 @@ describe("inMemoryDocumentGraph", () => {
             expectedToken: Option.none(),
             encodedTarget: revision.encodedTarget,
             projectionVersion: revision.projection.version,
+            textPolicy: revision.textPolicy,
             revisionHash: revision.revisionHash,
             embeddingProfile: profile,
             chunks,
@@ -517,6 +520,7 @@ describe("inMemoryDocumentGraph", () => {
       expectedToken: Option.none(),
       encodedTarget: revision.encodedTarget,
       projectionVersion: revision.projection.version,
+      textPolicy: revision.textPolicy,
       revisionHash: revision.revisionHash,
       embeddingProfile: profile,
       embeddings: [],
@@ -525,7 +529,7 @@ describe("inMemoryDocumentGraph", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const projections = yield* ProjectionIndexStore
-        const relations = yield* GraphRelationStore
+        const topology = yield* GraphTopologyStore
         const duplicateOrdinal = yield* projections
           .replaceRevision({
             ...replacement,
@@ -538,8 +542,8 @@ describe("inMemoryDocumentGraph", () => {
             chunks: [{ ...first, content: " " }],
           })
           .pipe(Effect.result)
-        const mismatchedSource = yield* relations
-          .replaceOutgoing({
+        const mismatchedSource = yield* topology
+          .replaceDocumentTopology({
             graph: revision.encodedTarget.graph,
             sourceDocumentKey: revision.documentKey,
             source: {
@@ -574,8 +578,8 @@ describe("inMemoryDocumentGraph", () => {
     )
     expect(result.mismatchedSource).toEqual(
       Result.fail(
-        new GraphRelationStoreFailed({
-          operation: "replace_outgoing",
+        new GraphTopologyStoreFailed({
+          operation: "replace_document",
           reason: "invalid_stored_state",
           cause: "source_graph_mismatch",
         }),

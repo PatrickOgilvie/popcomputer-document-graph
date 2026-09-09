@@ -1,10 +1,11 @@
-import { Context, Effect, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 import {
   JsonValueSchema,
   type JsonValue,
 } from "../document/json-value.js"
 import type { EncodedDocumentReference } from "../document/document-instance.js"
 import {
+  DocumentKeySchema,
   makeChunkId,
   makeDocumentKey,
   ProjectionRevisionHashSchema,
@@ -45,6 +46,112 @@ export {
   type MetadataSearchValue,
 }
 
+/** Search every indexed document admitted by the remaining graph scope. */
+export interface AllDocuments {
+  readonly _tag: "AllDocuments"
+}
+
+/** Represent a graph constraint that resolved to an empty document set. */
+export interface NoDocuments {
+  readonly _tag: "NoDocuments"
+}
+
+/** Search only the non-empty set of graph document identities resolved upstream. */
+export interface DocumentKeys {
+  readonly _tag: "DocumentKeys"
+  readonly documentKeys: readonly [
+    DocumentKey,
+    ...ReadonlyArray<DocumentKey>,
+  ]
+}
+
+/** Adapter-neutral document population selected for one retrieval request. */
+export type GraphSearchTarget =
+  | AllDocuments
+  | NoDocuments
+  | DocumentKeys
+
+/** Maximum explicit graph population carried in one provider search filter. */
+export const MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS = 10_000
+
+/** Runtime schema for graph-constrained retrieval targets. */
+export const GraphSearchTargetSchema = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literal("AllDocuments") }),
+  Schema.Struct({ _tag: Schema.Literal("NoDocuments") }),
+  Schema.Struct({
+    _tag: Schema.Literal("DocumentKeys"),
+    documentKeys: Schema.NonEmptyArray(DocumentKeySchema).pipe(
+      Schema.check(
+        Schema.isMaxLength(MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS),
+      ),
+    ),
+  }),
+])
+
+/** Select every document admitted by the remaining graph scope. */
+export const allDocuments = (): AllDocuments => ({
+  _tag: "AllDocuments",
+})
+
+/** Select no documents while preserving a valid, executable search plan. */
+export const noDocuments = (): NoDocuments => ({
+  _tag: "NoDocuments",
+})
+
+/** Select a non-empty, explicitly resolved set of graph document keys. */
+export const documentKeys = (
+  keys: readonly [DocumentKey, ...ReadonlyArray<DocumentKey>],
+): DocumentKeys => {
+  const unique = Array.from(new Set(keys)).sort()
+  if (unique.length > MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS) {
+    throw new Error(
+      `A graph search target cannot exceed ${MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS} document keys`,
+    )
+  }
+  const [first, ...rest] = unique
+  if (first === undefined) {
+    throw new Error("A document-key graph search target cannot be empty")
+  }
+  return {
+    _tag: "DocumentKeys",
+    documentKeys: [first, ...rest],
+  }
+}
+
+const normalizeGraphSearchTarget = (
+  target: GraphSearchTarget | undefined,
+): GraphSearchTarget => {
+  const parsed = Schema.decodeUnknownSync(GraphSearchTargetSchema)(
+    target ?? allDocuments(),
+  )
+
+  switch (parsed._tag) {
+    case "AllDocuments":
+      return allDocuments()
+    case "NoDocuments":
+      return noDocuments()
+    case "DocumentKeys": {
+      const [first, ...rest] = parsed.documentKeys
+      return documentKeys([first, ...rest])
+    }
+  }
+}
+
+/** Whether a graph search target admits one stable document identity. */
+export const documentKeyMatchesGraphSearchTarget = (
+  target: GraphSearchTarget,
+  documentKey: DocumentKey,
+): boolean => {
+  switch (target._tag) {
+    case "AllDocuments":
+      return true
+    case "NoDocuments":
+      return false
+    case "DocumentKeys":
+      return target.documentKeys.includes(documentKey)
+  }
+}
+
 /** Application input for a typed graph search scope. */
 export interface GraphSearchScopeInput<
   DocumentKind extends string,
@@ -55,6 +162,7 @@ export interface GraphSearchScopeInput<
   readonly includeProjections?: ReadonlyArray<ProjectionId> | undefined
   readonly excludeProjections?: ReadonlyArray<ProjectionId> | undefined
   readonly where?: ReadonlyArray<MetadataFilter> | undefined
+  readonly target?: GraphSearchTarget | undefined
 }
 
 /** Serializable constraints that every retrieval adapter must apply. */
@@ -67,7 +175,9 @@ export interface GraphSearchScope<GraphId extends string = string> {
   readonly registered: ReadonlyArray<{
     readonly documentKind: string
     readonly projection: string
+    readonly projectionVersion?: string
   }> | undefined
+  readonly target: GraphSearchTarget
   readonly includeDocumentKinds: ReadonlyArray<string>
   readonly excludeDocumentKinds: ReadonlyArray<string>
   readonly includeProjections: ReadonlyArray<string>
@@ -86,10 +196,12 @@ export const makeGraphSearchScope = <
   registered?: ReadonlyArray<{
     readonly documentKind: string
     readonly projection: string
+    readonly projectionVersion?: string
   }>,
 ): GraphSearchScope<GraphId> => ({
   graph,
   registered: registered?.map((target) => ({ ...target })),
+  target: normalizeGraphSearchTarget(input.target),
   includeDocumentKinds: [...(input.include ?? [])],
   excludeDocumentKinds: [...(input.exclude ?? [])],
   includeProjections: [...(input.includeProjections ?? [])],
@@ -104,6 +216,7 @@ export const projectionMatchesGraphSearchScope = (
     readonly graph: string
     readonly documentKind: string
     readonly projection: string
+    readonly projectionVersion?: string
   },
 ): boolean => {
   if (target.graph !== scope.graph) {
@@ -115,7 +228,9 @@ export const projectionMatchesGraphSearchScope = (
     !scope.registered.some(
       (registered) =>
         registered.documentKind === target.documentKind &&
-        registered.projection === target.projection,
+        registered.projection === target.projection &&
+        (registered.projectionVersion === undefined ||
+          registered.projectionVersion === target.projectionVersion),
     )
   ) {
     return false
@@ -324,6 +439,40 @@ export class ProjectionTextSearchStore extends Context.Service<
   ProjectionTextSearchStoreService
 >()("@popcomputer/document-graph/ProjectionTextSearchStore") {}
 
+/** Request sent to an adapter that can retrieve both hybrid channels atomically. */
+export interface HybridCandidateRequest {
+  /** Raw, validated lexical query. It has not been rewritten by the package. */
+  readonly query: string
+  readonly vector: ReadonlyArray<number>
+  readonly embeddingProfile: EmbeddingProfile
+  readonly textPolicy: Exclude<TextSearchPolicy, "disabled">
+  readonly scope: GraphSearchScope
+  readonly semanticCandidates: SearchResultCount
+  readonly textCandidates: SearchResultCount
+}
+
+/** Independently ranked channel candidates returned from one adapter request. */
+export interface HybridCandidateResult {
+  readonly semantic: ReadonlyArray<SemanticSearchCandidate>
+  readonly text: ReadonlyArray<TextSearchCandidate>
+}
+
+/** Optional adapter capability for one-snapshot semantic and text retrieval. */
+export interface ProjectionHybridSearchStoreService {
+  readonly searchHybridCandidates: (
+    request: HybridCandidateRequest,
+  ) => Effect.Effect<
+    HybridCandidateResult,
+    ProjectionSearchStoreFailed | ProjectionTextSearchStoreFailed
+  >
+}
+
+/** Effect service tag for optional batched hybrid candidate retrieval. */
+export class ProjectionHybridSearchStore extends Context.Service<
+  ProjectionHybridSearchStore,
+  ProjectionHybridSearchStoreService
+>()("@popcomputer/document-graph/ProjectionHybridSearchStore") {}
+
 /** A retrieval query did not satisfy the public search contract. */
 export class InvalidSearchQuery extends Schema.TaggedError<
   InvalidSearchQuery
@@ -460,7 +609,7 @@ const parseSearchQuery = (
     return Effect.fail(new InvalidSearchQuery({ reason: "empty" }))
   }
 
-  if (query.length > 32_000) {
+  if (query.length > 8_192) {
     return Effect.fail(new InvalidSearchQuery({ reason: "too_long" }))
   }
 
@@ -497,10 +646,20 @@ const candidateMatchesScope = (
   scope: GraphSearchScope,
 ): boolean => {
   if (
+    !documentKeyMatchesGraphSearchTarget(
+      scope.target,
+      candidate.documentKey,
+    )
+  ) {
+    return false
+  }
+
+  if (
     !projectionMatchesGraphSearchScope(scope, {
       graph: candidate.reference.graph,
       documentKind: candidate.reference.kind,
       projection: candidate.projection.id,
+      projectionVersion: candidate.projection.version,
     })
   ) {
     return false
@@ -693,6 +852,10 @@ export const searchGraphWithPreparedSemanticQuery: (
   ProjectionSearchStoreFailed | InvalidSearchOutput,
   ProjectionSearchStore
 > = Effect.fn("GraphRetrieval.searchSemanticPrepared")(function*(input) {
+    if (input.scope.target._tag === "NoDocuments") {
+      return []
+    }
+
     const store = yield* ProjectionSearchStore
     const candidates = yield* store.searchCandidates({
       vector: input.query.vector,
@@ -721,6 +884,11 @@ export const searchGraph: (
   SearchGraphError,
   EmbeddingProvider | ProjectionSearchStore
 > = Effect.fn("GraphRetrieval.searchSemantic")(function*(input) {
+    if (input.scope.target._tag === "NoDocuments") {
+      yield* parseSearchQuery(input.query)
+      return []
+    }
+
     const query = yield* prepareSemanticQuery(input.query)
     return yield* searchGraphWithPreparedSemanticQuery({
       query,
@@ -758,6 +926,10 @@ const searchGraphTextWithParsedQuery = (
   ProjectionTextSearchStore
 > =>
   Effect.gen(function*() {
+    if (input.scope.target._tag === "NoDocuments") {
+      return []
+    }
+
     const store = yield* ProjectionTextSearchStore
     const candidates = yield* store.searchTextCandidates({
       query: input.query,
@@ -961,25 +1133,62 @@ export const searchGraphHybridWithSemanticQuery: (
   | ProjectionSearchStore
   | ProjectionTextSearchStore
 > = Effect.fn("GraphRetrieval.searchHybridPrepared")(function*(input) {
-    const [semanticHits, textHits] = yield* Effect.all(
-      [
-        input.semanticQuery.pipe(
-          Effect.flatMap((query) =>
-            searchGraphWithPreparedSemanticQuery({
-              query,
-              scope: input.scope,
-              strategy: input.semantic,
-            }),
-          ),
-        ),
-        searchGraphText({
-          query: input.query,
-          scope: input.scope,
-          strategy: input.text,
-        }),
-      ],
-      { concurrency: "unbounded" },
+    if (input.scope.target._tag === "NoDocuments") {
+      yield* parseSearchQuery(input.query)
+      return []
+    }
+
+    const hybridStore = yield* Effect.serviceOption(
+      ProjectionHybridSearchStore,
     )
+    const [semanticHits, textHits] = Option.isSome(hybridStore)
+      ? yield* Effect.gen(function*() {
+          const query = yield* parseSearchQuery(input.query)
+          const prepared = yield* input.semanticQuery
+          const candidates = yield* hybridStore.value.searchHybridCandidates({
+            query,
+            vector: prepared.vector,
+            embeddingProfile: prepared.embeddingProfile,
+            textPolicy: input.text.policy,
+            scope: input.scope,
+            semanticCandidates: input.semantic.candidates,
+            textCandidates: input.text.candidates,
+          })
+          const [semanticCandidates, textCandidates] = yield* Effect.all([
+            validateCandidates("semantic", candidates.semantic, {
+              scope: input.scope,
+              candidates: input.semantic.candidates,
+            }),
+            validateCandidates("text", candidates.text, {
+              scope: input.scope,
+              candidates: input.text.candidates,
+            }),
+          ])
+
+          return [
+            selectSearchHits(semanticCandidates, input.semantic),
+            selectSearchHits(textCandidates, input.text),
+          ] as const
+        })
+      : yield* Effect.all(
+          [
+            input.semanticQuery.pipe(
+              Effect.flatMap((query) =>
+                searchGraphWithPreparedSemanticQuery({
+                  query,
+                  scope: input.scope,
+                  strategy: input.semantic,
+                }),
+              ),
+            ),
+            searchGraphText({
+              query: input.query,
+              scope: input.scope,
+              strategy: input.text,
+            }),
+          ],
+          { concurrency: "unbounded" },
+        )
 
     return yield* fuseHybridSearchHits(input, semanticHits, textHits)
   })

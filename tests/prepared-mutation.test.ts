@@ -1,19 +1,22 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Result, Schema } from "effect"
 import {
+  decodePreparedGraphMutation,
   defineDocument,
   defineDocumentGraph,
   defineEmbeddingProfile,
   EmbeddingProvider,
-  GraphRelationStore,
+  encodePreparedGraphMutation,
+  GraphTopologyStore,
   prepareGraphMutation,
+  PreparedGraphMutationArtifactSchema,
   ProjectionIndexStore,
   ProjectionSearchStore,
   ProjectionTextSearchStore,
   replayPreparedGraphMutation,
   sectionChunking,
   type EmbeddingProviderService,
-  type GraphRelationStoreService,
+  type GraphTopologyStoreService,
   type ProjectionIndexStoreService,
   type ProjectionSearchStoreService,
   type ProjectionTextSearchStoreService,
@@ -107,23 +110,23 @@ const makeWriteGuardedStorageLayer = () =>
       Effect.die("deleteRevision must not run during capture"),
     pruneGraph: () =>
       Effect.die("pruneGraph must not run during capture"),
-    replaceOutgoing: () =>
-      Effect.die("replaceOutgoing must not run during capture"),
+    replaceDocumentTopology: () =>
+      Effect.die("replaceDocumentTopology must not run during capture"),
     deleteNode: () =>
       Effect.die("deleteNode must not run during capture"),
-    pruneRelations: () =>
-      Effect.die("pruneRelations must not run during capture"),
+    pruneTopology: () =>
+      Effect.die("pruneTopology must not run during capture"),
   }))
 
 /** Resolve one complete fresh in-memory storage as a service value. */
 const makeFreshStorage = (): Effect.Effect<DocumentGraphStorageService> => Effect.gen(
   function*() {
     const projection: ProjectionIndexStoreService = yield* ProjectionIndexStore
-    const relations: GraphRelationStoreService = yield* GraphRelationStore
+    const topology: GraphTopologyStoreService = yield* GraphTopologyStore
     const semantic: ProjectionSearchStoreService = yield* ProjectionSearchStore
     const text: ProjectionTextSearchStoreService =
       yield* ProjectionTextSearchStore
-    return { ...projection, ...semantic, ...text, ...relations }
+    return { ...projection, ...semantic, ...text, ...topology }
   },
 ).pipe(Effect.provide(inMemoryDocumentGraph()))
 
@@ -131,7 +134,7 @@ const makeFreshStorage = (): Effect.Effect<DocumentGraphStorageService> => Effec
 const storageLayer = (storage: DocumentGraphStorageService) =>
   Layer.mergeAll(
     Layer.succeed(ProjectionIndexStore, storage),
-    Layer.succeed(GraphRelationStore, storage),
+    Layer.succeed(GraphTopologyStore, storage),
     Layer.succeed(ProjectionSearchStore, storage),
     Layer.succeed(ProjectionTextSearchStore, storage),
   )
@@ -264,7 +267,7 @@ describe("prepared graph mutations", () => {
     const live = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings),
       Layer.succeed(ProjectionIndexStore, writeGuarded),
-      Layer.succeed(GraphRelationStore, writeGuarded),
+      Layer.succeed(GraphTopologyStore, writeGuarded),
     )
 
     const prepared = await Effect.runPromise(
@@ -283,7 +286,7 @@ describe("prepared graph mutations", () => {
     const writeGuarded = await Effect.runPromise(makeWriteGuardedStorageLayer())
     const live = Layer.mergeAll(
       Layer.succeed(ProjectionIndexStore, writeGuarded),
-      Layer.succeed(GraphRelationStore, writeGuarded),
+      Layer.succeed(GraphTopologyStore, writeGuarded),
     )
     const revision = await Effect.runPromise(
       ArticleContent.project(article("abababab", "Guarded body.")),
@@ -312,8 +315,8 @@ describe("prepared graph mutations", () => {
           )),
           yield* Effect.result(prepareGraphMutation(
             Effect.gen(function*() {
-              const relations = yield* GraphRelationStore
-              return yield* relations.deleteNode({
+              const topology = yield* GraphTopologyStore
+              return yield* topology.deleteNode({
                 graph: graph.id,
                 documentKey: revision.documentKey,
               })
@@ -321,8 +324,8 @@ describe("prepared graph mutations", () => {
           )),
           yield* Effect.result(prepareGraphMutation(
             Effect.gen(function*() {
-              const relations = yield* GraphRelationStore
-              return yield* relations.pruneRelations({
+              const topology = yield* GraphTopologyStore
+              return yield* topology.pruneTopology({
                 graph: graph.id,
                 registered: [],
               })
@@ -384,5 +387,163 @@ describe("prepared graph mutations", () => {
       }),
     )
     expect(report.replacedRevisions).toBe(1)
+  })
+
+  test("persists canonical v1 JSON and restores a deeply frozen mutation", async () => {
+    const live = Layer.mergeAll(
+      Layer.succeed(EmbeddingProvider, embeddings),
+      inMemoryDocumentGraph(),
+    )
+    const prepared = await Effect.runPromise(
+      prepareGraphMutation(
+        ArticleNode.index(article("12121212", "Persisted body.")),
+      ).pipe(
+        Effect.map(({ mutation }) => mutation),
+        Effect.provide(live),
+      ),
+    )
+
+    const encoded = await Effect.runPromise(
+      encodePreparedGraphMutation(prepared),
+    )
+    const artifact = Schema.decodeUnknownSync(
+      PreparedGraphMutationArtifactSchema,
+    )(JSON.parse(encoded), { onExcessProperty: "error" })
+    expect(artifact.schemaVersion).toBe(1)
+
+    const restored = await Effect.runPromise(
+      decodePreparedGraphMutation(JSON.stringify({
+        ...artifact,
+        operations: [...artifact.operations].reverse(),
+      })),
+    )
+    expect(await Effect.runPromise(encodePreparedGraphMutation(restored)))
+      .toBe(encoded)
+    expect(restored).toEqual(prepared)
+    expect(Object.isFrozen(restored)).toBe(true)
+    expect(Object.isFrozen(restored.operations)).toBe(true)
+    expect(
+      restored.operations.every((operation) => Object.isFrozen(operation)),
+    ).toBe(true)
+
+    const projection = restored.operations.find(
+      (operation) => operation._tag === "ReplaceProjectedRevision",
+    )
+    if (projection?._tag !== "ReplaceProjectedRevision") {
+      throw new Error("expected a projection replacement")
+    }
+    expect(Object.isFrozen(projection.input.chunks[0])).toBe(true)
+    expect(Object.isFrozen(projection.input.chunks[0].text)).toBe(true)
+    expect(Object.isFrozen(projection.input.embeddings[0]?.vector)).toBe(true)
+  })
+
+  test("rejects malformed, duplicate, and invalid persisted operations", async () => {
+    const live = Layer.mergeAll(
+      Layer.succeed(EmbeddingProvider, embeddings),
+      inMemoryDocumentGraph(),
+    )
+    const prepared = await Effect.runPromise(
+      prepareGraphMutation(
+        ArticleNode.index(article("34343434", "Rejected body.")),
+      ).pipe(
+        Effect.map(({ mutation }) => mutation),
+        Effect.provide(live),
+      ),
+    )
+    const encoded = await Effect.runPromise(
+      encodePreparedGraphMutation(prepared),
+    )
+    const artifact = Schema.decodeUnknownSync(
+      PreparedGraphMutationArtifactSchema,
+    )(JSON.parse(encoded), { onExcessProperty: "error" })
+    const projection = artifact.operations.find(
+      (operation) => operation._tag === "ReplaceProjectedRevision",
+    )
+    const topology = artifact.operations.find(
+      (operation) => operation._tag === "ReplaceOutgoingGraphRelations",
+    )
+    if (projection?._tag !== "ReplaceProjectedRevision") {
+      throw new Error("expected a projection replacement")
+    }
+    if (topology?._tag !== "ReplaceOutgoingGraphRelations") {
+      throw new Error("expected a topology replacement")
+    }
+
+    const firstChunk = projection.input.chunks[0]
+    const cases = [
+      {
+        encoded: "{",
+        reason: "invalid_json",
+        detail: "parse_failed",
+      },
+      {
+        encoded: JSON.stringify({ schemaVersion: 2, operations: [] }),
+        reason: "invalid_shape",
+        detail: "schema_rejected",
+      },
+      {
+        encoded: JSON.stringify({ ...artifact, unexpected: true }),
+        reason: "invalid_shape",
+        detail: "schema_rejected",
+      },
+      {
+        encoded: JSON.stringify({
+          ...artifact,
+          operations: [...artifact.operations, projection],
+        }),
+        reason: "duplicate_operation",
+        detail: "projection",
+      },
+      {
+        encoded: JSON.stringify({
+          ...artifact,
+          operations: artifact.operations.map((operation) =>
+            operation._tag === "ReplaceProjectedRevision"
+              ? {
+                  ...operation,
+                  input: {
+                    ...operation.input,
+                    chunks: [firstChunk, firstChunk],
+                  },
+                }
+              : operation
+          ),
+        }),
+        reason: "invalid_projection",
+        detail: "duplicate_chunk_id",
+      },
+      {
+        encoded: JSON.stringify({
+          ...artifact,
+          operations: artifact.operations.map((operation) =>
+            operation._tag === "ReplaceOutgoingGraphRelations"
+              ? {
+                  ...operation,
+                  input: {
+                    ...operation.input,
+                    source: {
+                      ...operation.input.source,
+                      graph: `${operation.input.graph}-other`,
+                    },
+                  },
+                }
+              : operation
+          ),
+        }),
+        reason: "invalid_topology",
+        detail: "source_graph_mismatch",
+      },
+    ] as const
+
+    for (const item of cases) {
+      const outcome = await Effect.runPromise(
+        Effect.result(decodePreparedGraphMutation(item.encoded)),
+      )
+      expect(Result.isFailure(outcome)).toBe(true)
+      if (Result.isFailure(outcome)) {
+        expect(outcome.failure.reason).toBe(item.reason)
+        expect(outcome.failure.detail).toContain(item.detail)
+      }
+    }
   })
 })

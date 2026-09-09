@@ -27,7 +27,10 @@ import type {
   RegisteredVectorProjection,
   VectorProjection,
 } from "./vector-projection.js"
-import type { ProjectedText } from "./text-search-policy.js"
+import type {
+  ProjectedText,
+  TextSearchPolicy,
+} from "./text-search-policy.js"
 
 /** Projection identifiers registered by one document definition. */
 export type DocumentProjectionId<
@@ -129,6 +132,8 @@ export interface ProjectedRevision<
       ProjectionId
     >["version"]
   }
+  /** Lexical projection policy used to compile provider-specific fields. */
+  readonly textPolicy: TextSearchPolicy
   readonly revisionHash: ProjectionRevisionHash
   readonly chunks: readonly [
     ProjectedChunk<GraphId, Documents, Kind, ProjectionId>,
@@ -640,6 +645,7 @@ export const projectParsedDocument = <
       encodedTarget: document.encodedReference,
       documentKey: document.documentKey,
       projection: identifiedChunks[0].projection,
+      textPolicy: projection.text,
       revisionHash: identifiedChunks[0].revisionHash,
       chunks: identifiedChunks,
     } as ProjectedRevision<GraphId, Documents, Kind, ProjectionId>

@@ -1,0 +1,116 @@
+{
+  "measuredOn": "2026-09-07",
+  "postgres": "17.8 (Homebrew)",
+  "documents": 10000,
+  "chunksPerDocument": 1,
+  "dimensions": 1024,
+  "measuredRuns": 5,
+  "warmupRuns": 1,
+  "jit": false,
+  "identicalResults": true,
+  "measurements": [
+    {
+      "name": "cosine_previous",
+      "medianMilliseconds": 3638.802,
+      "samplesMilliseconds": [
+        3744.468,
+        3677.372,
+        3638.802,
+        3549.469,
+        3631.865
+      ],
+      "relationScans": [
+        {
+          "relation": "projected_chunks",
+          "scan": "Seq Scan",
+          "actualRows": 10000,
+          "actualLoops": 1
+        },
+        {
+          "relation": "projected_revisions",
+          "scan": "Seq Scan",
+          "actualRows": 10000,
+          "actualLoops": 1
+        }
+      ]
+    },
+    {
+      "name": "cosine_current",
+      "medianMilliseconds": 1359.357,
+      "samplesMilliseconds": [
+        1421.424,
+        1359.357,
+        1350.768,
+        1297.25,
+        1417.044
+      ],
+      "relationScans": [
+        {
+          "relation": "projected_chunks",
+          "scan": "Seq Scan",
+          "actualRows": 10000,
+          "actualLoops": 1
+        },
+        {
+          "relation": "projected_revisions",
+          "scan": "Seq Scan",
+          "actualRows": 10000,
+          "actualLoops": 1
+        }
+      ]
+    },
+    {
+      "name": "target_column_cast",
+      "medianMilliseconds": 2.008,
+      "samplesMilliseconds": [
+        1.926,
+        2.057,
+        2.008,
+        2.056,
+        1.864
+      ],
+      "relationScans": [
+        {
+          "relation": "projected_revisions",
+          "scan": "Seq Scan",
+          "actualRows": 1,
+          "actualLoops": 1
+        },
+        {
+          "relation": "projected_chunks",
+          "scan": "Index Scan",
+          "index": "projected_chunks_document_key_projection_id_idx",
+          "actualRows": 1,
+          "actualLoops": 1
+        }
+      ]
+    },
+    {
+      "name": "target_indexed",
+      "medianMilliseconds": 0.194,
+      "samplesMilliseconds": [
+        0.205,
+        0.194,
+        0.181,
+        0.199,
+        0.177
+      ],
+      "relationScans": [
+        {
+          "relation": "projected_revisions",
+          "scan": "Index Scan",
+          "index": "projected_revisions_pkey",
+          "actualRows": 1,
+          "actualLoops": 1
+        },
+        {
+          "relation": "projected_chunks",
+          "scan": "Index Scan",
+          "index": "projected_chunks_document_key_projection_id_idx",
+          "actualRows": 1,
+          "actualLoops": 1
+        }
+      ]
+    }
+  ]
+}

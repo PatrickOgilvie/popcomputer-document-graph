@@ -6,7 +6,10 @@ export const DocumentGraphOperationSchema = Schema.Literals([
   "remove",
   "reconcile_index",
   "search",
+  "search_within",
   "hydrate",
+  "nodes",
+  "related_nodes",
   "neighbours",
 ])
 
