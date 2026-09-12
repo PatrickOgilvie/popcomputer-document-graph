@@ -48,6 +48,7 @@ const sqliteBinding = (input: unknown): SqliteBinding => {
   ) {
     return input
   }
+
   throw new TypeError("The test D1 binding received an unsupported value")
 }
 
@@ -78,12 +79,15 @@ class SqliteD1PreparedStatement implements D1PreparedStatement {
     const statement = this.database.query<unknown, Array<SqliteBinding>>(
       this.query,
     )
+
     const rows = statement.all(...this.values.map(sqliteBinding))
+
     const changes = this.database
       .query<{ readonly changes: number }, []>(
         "SELECT changes() AS changes",
       )
       .get()?.changes ?? 0
+
     return {
       success: true,
       // SAFETY: This fake implements D1's caller-selected row generic. The
@@ -99,13 +103,17 @@ class SqliteD1PreparedStatement implements D1PreparedStatement {
     columnName?: string,
   ): Promise<T | null> {
     const first = this.executeSync<Record<string, unknown>>().results[0]
+
     if (first === undefined) return null
+
     if (columnName === undefined) {
       // SAFETY: D1's first<T>() API delegates selection of the row type to its
       // caller, matching this faithful boundary implementation.
       return first as T
     }
+
     const value = first[columnName]
+
     // SAFETY: D1's first<T>(column) API delegates selection of the column type
     // to its caller, matching this faithful boundary implementation.
     return value === undefined ? null : value as T
@@ -152,7 +160,7 @@ class SqliteD1Session implements D1DatabaseSession {
 
 class SqliteD1Database implements D1Database {
   readonly sessionConstraints: Array<
-    D1SessionConstraint | string | undefined
+    string | undefined
   > = []
 
   constructor(private readonly sqlite: Database) {}
@@ -165,15 +173,20 @@ class SqliteD1Database implements D1Database {
     statements: D1PreparedStatement[],
   ): Promise<D1Result<T>[]> {
     this.sqlite.exec("BEGIN IMMEDIATE")
+
     try {
       const results: Array<D1Result<T>> = []
+
       for (const statement of statements) {
         if (!(statement instanceof SqliteD1PreparedStatement)) {
           throw new TypeError("The test D1 batch received a foreign statement")
         }
+
         results.push(statement.executeSync<T>())
       }
+
       this.sqlite.exec("COMMIT")
+
       return results
     } catch (cause: unknown) {
       this.sqlite.exec("ROLLBACK")
@@ -183,13 +196,15 @@ class SqliteD1Database implements D1Database {
 
   async exec(query: string): Promise<D1ExecResult> {
     this.sqlite.exec(query)
+
     return { count: 0, duration: 0 }
   }
 
   withSession(
-    constraintOrBookmark?: D1SessionBookmark | D1SessionConstraint,
+    constraintOrBookmark?: D1SessionBookmark,
   ): D1DatabaseSession {
     this.sessionConstraints.push(constraintOrBookmark)
+
     return new SqliteD1Session(this)
   }
 
@@ -218,13 +233,16 @@ const makeDatabase = async (): Promise<SqliteD1Database> => {
   const sqlite = new Database(":memory:", { strict: true })
   sqlite.exec("PRAGMA foreign_keys = ON")
   const database = new SqliteD1Database(sqlite)
+
   const migration = await Bun.file(
     new URL(
       "../migrations/d1/0002_projection_publications.sql",
       import.meta.url,
     ),
   ).text()
+
   await database.exec(migration)
+
   return database
 }
 
@@ -233,16 +251,20 @@ const documentKey = makeDocumentKey({
   documentKind: "contract",
   encodedId: { id: "contract-1" },
 })
+
 const anotherDocumentKey = makeDocumentKey({
   graph: "contracts",
   documentKind: "invoice",
   encodedId: { id: "invoice-1" },
 })
+
 const key: ProjectionIndexKey = { documentKey, projection: "search" }
+
 const anotherKey: ProjectionIndexKey = {
   documentKey: anotherDocumentKey,
   projection: "search",
 }
+
 const profile = defineEmbeddingProfile({
   id: "test/d1-publication",
   version: "v1",
@@ -270,10 +292,13 @@ const replacementIntent = (input: {
       ((ordinal + 8) % 16).toString(16).repeat(64),
     ),
   }))
+
   const [firstChunk, ...remainingChunks] = chunks
+
   if (firstChunk === undefined) throw new Error("A fixture needs one chunk")
   const selectedKey = input.key ?? key
   const requiredSlotHighWater = input.requiredSlotHighWater ?? chunks.length
+
   return {
     _tag: "Replace",
     key: selectedKey,
@@ -350,9 +375,11 @@ const runWithCoordinator = <A, E>(
     indexGeneration,
     publicationLeaseMilliseconds: 1_000,
   }
+
   const config = retainedPublicationHistory === undefined
     ? requiredConfig
     : { ...requiredConfig, retainedPublicationHistory }
+
   return Effect.runPromise(effect.pipe(
     Effect.provide(d1ProjectionPublicationCoordinator(config)),
   ))
@@ -362,6 +389,7 @@ describe("D1 projection publication coordinator", () => {
   test.each(["replace", "delete"] as const)("a rejected duplicate cannot retire an in-flight %s publication", async (operation) => {
     const database = await makeDatabase()
     const fixture = makeProjectionIndexStoreConformanceFixture()
+
     const partition = makeTurbopufferWorkspacePartition({
       deploymentId: "test:publication-overlap",
       endpoint: { _tag: "Region", region: "gcp-us-central1" },
@@ -369,6 +397,7 @@ describe("D1 projection publication coordinator", () => {
       embeddingProfile: fixture.initial.embeddingProfile,
       schemaGeneration: 1,
     })
+
     try {
       const result = await runWithCoordinator(database, Effect.gen(function*() {
         const coordinator = yield* ProjectionPublicationCoordinator
@@ -376,6 +405,7 @@ describe("D1 projection publication coordinator", () => {
         const release = yield* Deferred.make<void>()
         let writes = 0
         let providerRows: NonNullable<NamespaceWriteParams["upsert_rows"]> = []
+
         const client: TurbopufferClientService = {
           partition,
           query: () => Effect.die("Unexpected provider read: the replacement supplies every vector"),
@@ -385,26 +415,33 @@ describe("D1 projection publication coordinator", () => {
           destroyNamespace: () => Effect.die("Unexpected namespace deletion"),
           write: (request) => Effect.gen(function*() {
             const attempt = ++writes
+
             if (attempt === 2) {
               yield* Deferred.succeed(started, undefined)
               yield* Deferred.await(release)
             }
+
             if (attempt === 3) {
-              return yield* Effect.fail(new TurbopufferTransportFailed({
+              return yield* new TurbopufferTransportFailed({
                 operation: "write",
                 reason: "rate_limited",
                 requestOutcome: "definitely_not_applied",
                 cause: "The duplicate request was rejected before applying",
-              }))
+              })
             }
+
             providerRows = request.upsert_rows ?? []
+
             return { status: "OK", rows_affected: providerRows.length }
           }),
         }
+
         const store = yield* makeTurbopufferProjectionIndexStore({ partition }).pipe(
           Effect.provideService(TurbopufferClient, client),
         )
+
         const initial = yield* store.replaceRevision(fixture.initial)
+
         const command = operation === "replace"
           ? store.replaceRevision({
               ...fixture.metadataOnly,
@@ -412,6 +449,7 @@ describe("D1 projection publication coordinator", () => {
               embeddings: fixture.initial.embeddings,
             }).pipe(Effect.asVoid)
           : store.deleteRevision(fixture.initial.key).pipe(Effect.asVoid)
+
         const original = yield* Effect.forkChild(command.pipe(Effect.result))
         yield* Deferred.await(started)
         const duplicate = yield* command.pipe(Effect.result)
@@ -420,6 +458,7 @@ describe("D1 projection publication coordinator", () => {
         const completed = yield* Fiber.join(original)
         const [after] = yield* coordinator.loadHeads([fixture.initial.key])
         const [revision] = yield* coordinator.loadRevisions([fixture.initial.key])
+
         return {
           duplicate,
           completed,
@@ -430,12 +469,14 @@ describe("D1 projection publication coordinator", () => {
           writes,
         }
       }), partition.d1IndexGeneration)
+
       expect(result.duplicate).toMatchObject({ _tag: "Failure", failure: { reason: "unavailable" } })
       expect(Option.isSome(result.during.pending)).toBe(true)
       expect(Result.isSuccess(result.completed)).toBe(true)
       expect(Option.isNone(result.after.pending)).toBe(true)
       const active = result.revision
       const liveRows = result.providerRows.filter((row) => row["is_live"] === true)
+
       if (operation === "replace") {
         expect(Option.getOrThrow(active).revisionHash).toBe(fixture.metadataOnly.revisionHash)
         expect(liveRows.map((row) => row["revision_hash"]))
@@ -444,6 +485,7 @@ describe("D1 projection publication coordinator", () => {
         expect(Option.isNone(active)).toBe(true)
         expect(liveRows).toHaveLength(0)
       }
+
       expect(result.writes).toBe(3)
     } finally {
       database.close()
@@ -452,12 +494,14 @@ describe("D1 projection publication coordinator", () => {
 
   test("begins and resumes the same durable publication lease", async () => {
     const database = await makeDatabase()
+
     const intent = replacementIntent({
       mutation: "replace-resume",
       digestCharacter: "a",
       token: "token-a",
       requiredSlotHighWater: 4,
     })
+
     try {
       const result = await runWithCoordinator(
         database,
@@ -466,15 +510,18 @@ describe("D1 projection publication coordinator", () => {
           const first = yield* coordinator.beginPublication(intent)
           const resumed = yield* coordinator.beginPublication(intent)
           const heads = yield* coordinator.loadHeads([key, key])
+
           return { first, resumed, heads }
         }),
       )
 
       expect(result.first._tag).toBe("Publish")
       expect(result.resumed._tag).toBe("Publish")
+
       if (result.first._tag !== "Publish" || result.resumed._tag !== "Publish") {
         throw new Error("Expected publication leases")
       }
+
       const firstPublicationId = result.first.lease.publicationId
       expect(result.resumed.lease.publicationId).toBe(
         firstPublicationId,
@@ -501,24 +548,29 @@ describe("D1 projection publication coordinator", () => {
 
   test("isolates heads and generation counters by physical index generation", async () => {
     const database = await makeDatabase()
+
     const intent = replacementIntent({
       mutation: "replace-side-by-side",
       digestCharacter: "a",
       token: "token-side-by-side",
       requiredSlotHighWater: 3,
     })
+
     const publishIn = (indexGeneration: string) => runWithCoordinator(
       database,
       Effect.gen(function*() {
         const coordinator = yield* ProjectionPublicationCoordinator
         const begun = yield* coordinator.beginPublication(intent)
+
         if (begun._tag !== "Publish") return yield* Effect.die("No lease")
         yield* coordinator.finalizePublication(begun.lease)
         const [lookup] = yield* coordinator.loadHeads([key])
+
         return { lease: begun.lease, lookup }
       }),
       indexGeneration,
     )
+
     try {
       const first = await publishIn("schema-v1")
       const second = await publishIn("schema-v2")
@@ -547,29 +599,36 @@ describe("D1 projection publication coordinator", () => {
 
   test("finalizes a revision and replays its exact committed outcome", async () => {
     const database = await makeDatabase()
+
     const intent = replacementIntent({
       mutation: "replace-finalize",
       digestCharacter: "b",
       token: "token-b",
     })
+
     try {
       const result = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const begun = yield* coordinator.beginPublication(intent)
+
           if (begun._tag !== "Publish") return yield* Effect.die("No lease")
           const finalized = yield* coordinator.finalizePublication(begun.lease)
+
           const finalizedAgain = yield* coordinator.finalizePublication(
             begun.lease,
           )
+
           // The TP adapter replans counts against the now-active revision on
           // retry, but the durable committed outcome must remain the original.
           const replay = yield* coordinator.beginPublication({
             ...intent,
             commit: { ...intent.commit, inserted: 0, updated: intent.liveSlotCount },
           })
+
           const revisions = yield* coordinator.loadRevisions([key, key])
+
           return { begun, finalized, finalizedAgain, replay, revisions }
         }),
       )
@@ -601,26 +660,31 @@ describe("D1 projection publication coordinator", () => {
 
   test("keeps an expired prepared publication authoritative until reconciliation", async () => {
     const database = await makeDatabase()
+
     const firstIntent = replacementIntent({
       mutation: "replace-takeover-a",
       digestCharacter: "c",
       token: "token-c",
       requiredSlotHighWater: 6,
     })
+
     const secondIntent = replacementIntent({
       mutation: "replace-takeover-b",
       digestCharacter: "d",
       token: "token-d",
       requiredSlotHighWater: 2,
     })
+
     try {
       const first = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
+
           return yield* coordinator.beginPublication(firstIntent)
         }),
       )
+
       if (first._tag !== "Publish") throw new Error("Expected first lease")
       database.execute(
         `UPDATE document_graph_projection_heads
@@ -631,21 +695,28 @@ describe("D1 projection publication coordinator", () => {
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
+
           const second = yield* coordinator.beginPublication(secondIntent)
             .pipe(Effect.result)
+
           const resumed = yield* coordinator.beginPublication(firstIntent)
+
           if (resumed._tag !== "Publish") {
             return yield* Effect.die("Expected the prepared lease to resume")
           }
+
           const finalized = yield* coordinator.finalizePublication(
             resumed.lease,
           )
+
           const [lookup] = yield* coordinator.loadHeads([key])
+
           return { second, resumed, finalized, lookup }
         }),
       )
 
       expect(Result.isFailure(result.second)).toBe(true)
+
       if (Result.isFailure(result.second)) {
         expect(result.second.failure).toMatchObject({
           _tag: "ProjectionPublicationCoordinatorFailed",
@@ -653,6 +724,7 @@ describe("D1 projection publication coordinator", () => {
           reason: "publication_in_progress",
         })
       }
+
       expect(result.resumed.lease.publicationId).toBe(
         first.lease.publicationId,
       )
@@ -663,6 +735,7 @@ describe("D1 projection publication coordinator", () => {
         commit: firstIntent.commit,
       })
       expect(Option.isSome(result.lookup?.head ?? Option.none())).toBe(true)
+
       if (Option.isSome(result.lookup?.head ?? Option.none())) {
         const head = Option.getOrThrow(result.lookup?.head ?? Option.none())
         expect(head.lastAllocatedGeneration).toBe(1)
@@ -673,6 +746,7 @@ describe("D1 projection publication coordinator", () => {
         })
         expect(Option.isNone(head.pending)).toBe(true)
       }
+
       expect(database.row<{ readonly status: string }>(
         `SELECT status FROM document_graph_projection_publications
          WHERE publication_id = ?`,
@@ -700,33 +774,39 @@ describe("D1 projection publication coordinator", () => {
 
   test("does not attach chunks when a mutation ID collides on payload digest", async () => {
     const database = await makeDatabase()
+
     const prepared = replacementIntent({
       mutation: "replace-digest-collision",
       digestCharacter: "a",
       token: "token-digest-a",
       chunks: 1,
     })
+
     const collision = replacementIntent({
       mutation: "replace-digest-collision",
       digestCharacter: "b",
       token: "token-digest-b",
       chunks: 2,
     })
+
     try {
       const result = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const first = yield* coordinator.beginPublication(prepared)
+
           const second = yield* coordinator.beginPublication(collision).pipe(
             Effect.result,
           )
+
           return { first, second }
         }),
       )
 
       expect(result.first._tag).toBe("Publish")
       expect(Result.isFailure(result.second)).toBe(true)
+
       if (Result.isFailure(result.second)) {
         expect(result.second.failure).toMatchObject({
           _tag: "ProjectionPublicationCoordinatorFailed",
@@ -734,6 +814,7 @@ describe("D1 projection publication coordinator", () => {
           reason: "invalid_stored_state",
         })
       }
+
       expect(database.row<{ readonly chunk_count: number }>(
         `SELECT COUNT(*) AS chunk_count
          FROM document_graph_projection_mutation_chunks
@@ -747,33 +828,41 @@ describe("D1 projection publication coordinator", () => {
 
   test("rejects a second live writer and stale revision tokens", async () => {
     const database = await makeDatabase()
+
     const firstIntent = replacementIntent({
       mutation: "replace-conflict-a",
       digestCharacter: "e",
       token: "token-e",
       slotHighWater: 6,
     })
+
     const secondIntent = replacementIntent({
       mutation: "replace-conflict-b",
       digestCharacter: "f",
       token: "token-f",
     })
+
     try {
       const pendingConflict = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const begun = yield* coordinator.beginPublication(firstIntent)
+
           const conflict = yield* coordinator.beginPublication(secondIntent)
             .pipe(Effect.result)
+
           return { begun, conflict }
         }),
       )
+
       expect(Result.isFailure(pendingConflict.conflict)).toBe(true)
+
       if (Result.isFailure(pendingConflict.conflict)) {
         expect(pendingConflict.conflict.failure._tag).toBe(
           "ProjectionPublicationCoordinatorFailed",
         )
+
         if (pendingConflict.conflict.failure._tag ===
           "ProjectionPublicationCoordinatorFailed") {
           expect(pendingConflict.conflict.failure.reason).toBe(
@@ -781,9 +870,11 @@ describe("D1 projection publication coordinator", () => {
           )
         }
       }
+
       if (pendingConflict.begun._tag !== "Publish") {
         throw new Error("Expected first lease")
       }
+
       const firstLease = pendingConflict.begun.lease
 
       const cas = await runWithCoordinator(
@@ -791,16 +882,20 @@ describe("D1 projection publication coordinator", () => {
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           yield* coordinator.finalizePublication(firstLease)
+
           const stale = replacementIntent({
             mutation: "replace-stale-token",
             digestCharacter: "1",
             token: "token-next",
             expectedToken: "not-token-e",
           })
+
           return yield* coordinator.beginPublication(stale).pipe(Effect.result)
         }),
       )
+
       expect(Result.isFailure(cas)).toBe(true)
+
       if (Result.isFailure(cas)) {
         expect(cas.failure).toBeInstanceOf(ProjectionIndexConflict)
       }
@@ -811,37 +906,47 @@ describe("D1 projection publication coordinator", () => {
 
   test("finalizes deletion, clears revision inventory, and replays deletes", async () => {
     const database = await makeDatabase()
+
     const replacement = replacementIntent({
       mutation: "replace-before-delete",
       digestCharacter: "2",
       token: "token-before-delete",
     })
+
     const deletion = deletionIntent({
       mutation: "delete-exact",
       digestCharacter: "3",
       expectedToken: "token-before-delete",
     })
+
     try {
       const result = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const replace = yield* coordinator.beginPublication(replacement)
+
           if (replace._tag !== "Publish") return yield* Effect.die("No lease")
           yield* coordinator.finalizePublication(replace.lease)
           const begunDelete = yield* coordinator.beginPublication(deletion)
+
           if (begunDelete._tag !== "Publish") return yield* Effect.die("No delete")
+
           const finalized = yield* coordinator.finalizePublication(
             begunDelete.lease,
           )
+
           const exactReplay = yield* coordinator.beginPublication(deletion)
+
           const otherReplay = yield* coordinator.beginPublication(
             deletionIntent({
               mutation: "delete-after-delete",
               digestCharacter: "4",
             }),
           )
+
           const [revision] = yield* coordinator.loadRevisions([key])
+
           return { finalized, exactReplay, otherReplay, revision }
         }),
       )
@@ -869,12 +974,14 @@ describe("D1 projection publication coordinator", () => {
 
   test("selects only revisions stale against the compiled graph catalog", async () => {
     const database = await makeDatabase()
+
     const retained = replacementIntent({
       mutation: "replace-retained",
       digestCharacter: "5",
       token: "token-retained",
       projectionVersion: "v2",
     })
+
     const stale = replacementIntent({
       key: anotherKey,
       mutation: "replace-stale",
@@ -883,16 +990,20 @@ describe("D1 projection publication coordinator", () => {
       documentKind: "invoice",
       projectionVersion: "v1",
     })
+
     try {
       const keys = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
+
           for (const intent of [retained, stale]) {
             const begun = yield* coordinator.beginPublication(intent)
+
             if (begun._tag !== "Publish") return yield* Effect.die("No lease")
             yield* coordinator.finalizePublication(begun.lease)
           }
+
           return yield* coordinator.listStaleRevisions({
             graph: "contracts",
             registered: [{
@@ -912,6 +1023,7 @@ describe("D1 projection publication coordinator", () => {
 
   test("rejects a stale planned closure and exactly resumes its replanned lease", async () => {
     const database = await makeDatabase()
+
     const superseded = replacementIntent({
       mutation: "replace-higher-closure",
       digestCharacter: "7",
@@ -919,6 +1031,7 @@ describe("D1 projection publication coordinator", () => {
       requiredSlotHighWater: 6,
       slotHighWater: 6,
     })
+
     const stale = replacementIntent({
       mutation: "replace-stale-closure",
       digestCharacter: "8",
@@ -926,6 +1039,7 @@ describe("D1 projection publication coordinator", () => {
       requiredSlotHighWater: 2,
       slotHighWater: 2,
     })
+
     const replanned = replacementIntent({
       mutation: "replace-replanned-closure",
       digestCharacter: "9",
@@ -933,26 +1047,31 @@ describe("D1 projection publication coordinator", () => {
       requiredSlotHighWater: 2,
       slotHighWater: 6,
     })
+
     try {
       const result = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const higher = yield* coordinator.beginPublication(superseded)
+
           if (higher._tag !== "Publish") return yield* Effect.die("No lease")
           yield* coordinator.supersedePublication(higher.lease)
 
           const staleResult = yield* coordinator.beginPublication(stale).pipe(
             Effect.result,
           )
+
           const begun = yield* coordinator.beginPublication(replanned)
           const resumed = yield* coordinator.beginPublication(replanned)
           const [lookup] = yield* coordinator.loadHeads([key])
+
           return { higher, staleResult, begun, resumed, lookup }
         }),
       )
 
       expect(Result.isFailure(result.staleResult)).toBe(true)
+
       if (Result.isFailure(result.staleResult)) {
         expect(result.staleResult.failure).toMatchObject({
           _tag: "ProjectionPublicationPlanStale",
@@ -962,15 +1081,19 @@ describe("D1 projection publication coordinator", () => {
           currentSlotHighWater: 6,
         })
       }
+
       expect(result.begun._tag).toBe("Publish")
       expect(result.resumed._tag).toBe("Publish")
+
       if (result.begun._tag !== "Publish" || result.resumed._tag !== "Publish") {
         throw new Error("Expected publication leases")
       }
+
       expect(Number(result.begun.lease.generation)).toBe(2)
       expect(result.begun.lease.slotHighWater).toBe(6)
       expect(result.resumed.lease).toEqual(result.begun.lease)
       expect(Option.isSome(result.lookup?.head ?? Option.none())).toBe(true)
+
       if (Option.isSome(result.lookup?.head ?? Option.none())) {
         const head = Option.getOrThrow(result.lookup?.head ?? Option.none())
         expect(head.lastAllocatedGeneration).toBe(2)
@@ -983,6 +1106,7 @@ describe("D1 projection publication coordinator", () => {
           slotHighWater: 6,
         })
       }
+
       expect(database.row<{ readonly generation: number }>(
         `SELECT generation FROM document_graph_projection_publications
          WHERE mutation_id = ?`,
@@ -995,12 +1119,14 @@ describe("D1 projection publication coordinator", () => {
 
   test("rejects inherited and initial slot capacity overflow", async () => {
     const database = await makeDatabase()
+
     const seed = replacementIntent({
       mutation: "replace-capacity-seed",
       digestCharacter: "7",
       token: "token-capacity-seed",
       requiredSlotHighWater: 6,
     })
+
     const inheritedOverflow = replacementIntent({
       mutation: "replace-inherited-overflow",
       digestCharacter: "8",
@@ -1009,6 +1135,7 @@ describe("D1 projection publication coordinator", () => {
       slotHighWater: 6,
       maximumSlotHighWater: 4,
     })
+
     const initialOverflow = replacementIntent({
       key: anotherKey,
       mutation: "replace-oversized",
@@ -1017,54 +1144,68 @@ describe("D1 projection publication coordinator", () => {
       requiredSlotHighWater: 5,
       maximumSlotHighWater: 4,
     })
+
     try {
       const result = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const seeded = yield* coordinator.beginPublication(seed)
+
           if (seeded._tag !== "Publish") return yield* Effect.die("No lease")
           yield* coordinator.supersedePublication(seeded.lease)
+
           const inherited = yield* coordinator.beginPublication(
             inheritedOverflow,
           ).pipe(Effect.result)
+
           const initial = yield* coordinator.beginPublication(
             initialOverflow,
           ).pipe(
             Effect.result,
           )
+
           const heads = yield* coordinator.loadHeads([key, anotherKey])
+
           return { inherited, initial, heads }
         }),
       )
 
       expect(Result.isFailure(result.inherited)).toBe(true)
+
       if (Result.isFailure(result.inherited)) {
         expect(result.inherited.failure._tag).toBe(
           "ProjectionPublicationCoordinatorFailed",
         )
+
         if (result.inherited.failure._tag ===
           "ProjectionPublicationCoordinatorFailed") {
           expect(result.inherited.failure.reason).toBe("capacity_exceeded")
         }
       }
+
       expect(Result.isFailure(result.initial)).toBe(true)
+
       if (Result.isFailure(result.initial)) {
         expect(result.initial.failure._tag).toBe(
           "ProjectionPublicationCoordinatorFailed",
         )
+
         if (result.initial.failure._tag ===
           "ProjectionPublicationCoordinatorFailed") {
           expect(result.initial.failure.reason).toBe("capacity_exceeded")
         }
       }
+
       const inheritedHead = result.heads[0]?.head ?? Option.none()
       expect(Option.isSome(inheritedHead)).toBe(true)
+
       if (Option.isSome(inheritedHead)) {
         expect(inheritedHead.value.slotHighWater).toBe(6)
         expect(inheritedHead.value.lastAllocatedGeneration).toBe(1)
         expect(Option.isNone(inheritedHead.value.pending)).toBe(true)
       }
+
       expect(Option.isNone(result.heads[1]?.head ?? Option.none())).toBe(true)
     } finally {
       database.close()
@@ -1073,22 +1214,27 @@ describe("D1 projection publication coordinator", () => {
 
   test("classifies malformed persisted heads as invalid stored state", async () => {
     const database = await makeDatabase()
+
     const intent = replacementIntent({
       mutation: "replace-corrupt",
       digestCharacter: "8",
       token: "token-corrupt",
     })
+
     try {
       const begun = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const result = yield* coordinator.beginPublication(intent)
+
           if (result._tag !== "Publish") return yield* Effect.die("No lease")
           yield* coordinator.finalizePublication(result.lease)
+
           return result
         }),
       )
+
       expect(begun._tag).toBe("Publish")
       database.execute(
         `UPDATE document_graph_projection_heads SET active_token = ''
@@ -1100,10 +1246,13 @@ describe("D1 projection publication coordinator", () => {
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
+
           return yield* coordinator.loadHeads([key]).pipe(Effect.result)
         }),
       )
+
       expect(Result.isFailure(result)).toBe(true)
+
       if (Result.isFailure(result)) {
         expect(result.failure.reason).toBe("invalid_stored_state")
       }
@@ -1114,17 +1263,20 @@ describe("D1 projection publication coordinator", () => {
 
   test("classifies a malformed active revision token as invalid stored state", async () => {
     const database = await makeDatabase()
+
     const intent = replacementIntent({
       mutation: "replace-corrupt-revision",
       digestCharacter: "9",
       token: "token-corrupt-revision",
     })
+
     try {
       await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const result = yield* coordinator.beginPublication(intent)
+
           if (result._tag !== "Publish") return yield* Effect.die("No lease")
           yield* coordinator.finalizePublication(result.lease)
         }),
@@ -1139,10 +1291,13 @@ describe("D1 projection publication coordinator", () => {
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
+
           return yield* coordinator.loadRevisions([key]).pipe(Effect.result)
         }),
       )
+
       expect(Result.isFailure(result)).toBe(true)
+
       if (Result.isFailure(result)) {
         expect(result.failure.reason).toBe("invalid_stored_state")
       }
@@ -1153,17 +1308,20 @@ describe("D1 projection publication coordinator", () => {
 
   test("classifies a malformed staged mutation during begin as typed invalid state", async () => {
     const database = await makeDatabase()
+
     const intent = replacementIntent({
       mutation: "replace-corrupt-begin",
       digestCharacter: "a",
       token: "token-corrupt-begin",
     })
+
     try {
       await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
           const begun = yield* coordinator.beginPublication(intent)
+
           if (begun._tag !== "Publish") return yield* Effect.die("No lease")
           yield* coordinator.supersedePublication(begun.lease)
         }),
@@ -1180,6 +1338,7 @@ describe("D1 projection publication coordinator", () => {
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
+
           return yield* coordinator.beginPublication(intent).pipe(
             Effect.result,
           )
@@ -1187,6 +1346,7 @@ describe("D1 projection publication coordinator", () => {
       )
 
       expect(Result.isFailure(result)).toBe(true)
+
       if (Result.isFailure(result)) {
         expect(result.failure).toMatchObject({
           _tag: "ProjectionPublicationCoordinatorFailed",
@@ -1201,12 +1361,14 @@ describe("D1 projection publication coordinator", () => {
 
   test("bounds completed journals and collects their orphaned mutation payloads", async () => {
     const database = await makeDatabase()
+
     const intents = ["a", "b", "c", "d"].map((digestCharacter, index) => {
       const requiredIntent = {
         mutation: `replace-retention-${index}`,
         digestCharacter,
         token: `token-retention-${index}`,
       }
+
       return replacementIntent(index === 0
         ? requiredIntent
         : {
@@ -1214,18 +1376,23 @@ describe("D1 projection publication coordinator", () => {
             expectedToken: `token-retention-${index - 1}`,
           })
     })
+
     try {
       const generations = await runWithCoordinator(
         database,
         Effect.gen(function*() {
           const coordinator = yield* ProjectionPublicationCoordinator
+
           return yield* Effect.forEach(intents, (intent) =>
             Effect.gen(function*() {
               const begun = yield* coordinator.beginPublication(intent)
+
               if (begun._tag !== "Publish") {
                 return yield* Effect.die("Expected a publication lease")
               }
+
               yield* coordinator.finalizePublication(begun.lease)
+
               return Number(begun.lease.generation)
             }), { concurrency: 1 })
         }),

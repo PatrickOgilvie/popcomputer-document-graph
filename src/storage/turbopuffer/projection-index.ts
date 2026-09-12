@@ -17,7 +17,7 @@ import {
   ProjectionMutationIdSchema,
   ProjectionPayloadDigestSchema,
   ProjectionPublicationCoordinator,
-  ProjectionPublicationCoordinatorFailed,
+  type ProjectionPublicationCoordinatorFailed,
   ProjectionPublicationGenerationSchema,
   ProjectionPublicationIdSchema,
   ProjectionPublicationPlanStale,
@@ -132,6 +132,7 @@ const resolveConfig = (
 ): ResolvedProjectionIndexConfig => {
   const maximumSlotsPerRevision = config.maximumSlotsPerRevision ?? 10_000
   const maximumPublicationBytes = config.maximumPublicationBytes ?? 4_194_304
+
   if (!Number.isSafeInteger(maximumSlotsPerRevision) ||
     maximumSlotsPerRevision < 1 ||
     maximumSlotsPerRevision > TurbopufferMaximumQueryRows) {
@@ -140,6 +141,7 @@ const resolveConfig = (
       reason: "invalid_value",
     })
   }
+
   if (!Number.isSafeInteger(maximumPublicationBytes) ||
     maximumPublicationBytes < 1_024 ||
     maximumPublicationBytes > TurbopufferMaximumWriteBytes) {
@@ -148,7 +150,9 @@ const resolveConfig = (
       reason: "invalid_value",
     })
   }
+
   const partition = validateTurbopufferWorkspacePartition(config.partition)
+
   return {
     partition,
     embeddingProfile: partition.embeddingProfile,
@@ -169,15 +173,7 @@ const coordinatorFailure = (
   operation: ProjectionIndexStoreFailed["operation"],
   error: ProjectionPublicationCoordinatorFailed,
 ): ProjectionIndexStoreFailed =>
-  indexFailure(
-    operation,
-    error.reason === "invalid_stored_state"
-      ? "invalid_stored_state"
-      : error.reason === "capacity_exceeded"
-        ? "capacity_exceeded"
-        : error.reason,
-    error,
-  )
+  indexFailure(operation, error.reason, error)
 
 const providerFailure = (
   operation: ProjectionIndexStoreFailed["operation"],
@@ -235,6 +231,7 @@ const loadReusableVectors = Effect.fn(
     rank_by: ["id", "asc"],
     consistency: { level: "strong" },
   }
+
   const response = yield* input.client.query(request)
   const rows = yield* decodeEnvelopeRows(response, "query")
   const vectors = new Map<ContentHash, ReadonlyArray<number>>()
@@ -258,7 +255,9 @@ const loadReusableVectors = Effect.fn(
             cause: "Reusable vector dimensions do not match the profile",
           }))
         }
+
         const previous = vectors.get(decoded.content_hash)
+
         if (
           previous !== undefined &&
           (previous.length !== decoded.vector.length ||
@@ -272,11 +271,14 @@ const loadReusableVectors = Effect.fn(
             cause: "One content hash resolved to inconsistent reusable vectors",
           }))
         }
+
         vectors.set(decoded.content_hash, decoded.vector)
+
         return Effect.void
       }),
     ),
   )
+
   return vectors
 })
 
@@ -338,6 +340,7 @@ const replacementIdentity = (input: {
     input.slotHighWater,
     input.replacement.chunks.map(chunkPayload),
   ]
+
   const physical: JsonValue = [
     logical,
     input.replacement.chunks.map((chunk) => [
@@ -345,6 +348,7 @@ const replacementIdentity = (input: {
       input.vectors.get(chunk.contentHash) ?? null,
     ]),
   ]
+
   return {
     mutationId: Schema.decodeSync(ProjectionMutationIdSchema)(
       hashTurbopufferIdentity(logical),
@@ -376,7 +380,9 @@ const deletionIdentity = (input: {
     input.config.schemaGeneration,
     input.slotHighWater,
   ]
+
   const digest = hashTurbopufferIdentity([logical, "all-slots-tombstoned"])
+
   return {
     mutationId: Schema.decodeSync(ProjectionMutationIdSchema)(
       hashTurbopufferIdentity(logical),
@@ -414,9 +420,11 @@ const buildPublicationRows = (input: {
   readonly config: ResolvedProjectionIndexConfig
 }): ReadonlyArray<TurbopufferPublicationRow> => {
   const context = rowContext(input)
+
   const chunks = new Map(
     (input.material?.chunks ?? []).map((chunk) => [chunk.ordinal, chunk]),
   )
+
   const rows: Array<TurbopufferPublicationRow> = [
     makeTurbopufferMarkerRow({
       context,
@@ -424,16 +432,21 @@ const buildPublicationRows = (input: {
       slotHighWater: input.lease.slotHighWater,
     }),
   ]
+
   for (let slotOrdinal = 0; slotOrdinal < input.lease.slotHighWater; slotOrdinal += 1) {
     const chunk = chunks.get(slotOrdinal)
+
     if (chunk === undefined || input.material === undefined) {
       rows.push(makeTurbopufferTombstoneRow({ context, slotOrdinal }))
       continue
     }
+
     const vector = input.material.vectors.get(chunk.contentHash)
+
     if (vector === undefined) {
       throw new Error("A planned publication lost a complete vector")
     }
+
     rows.push(makeTurbopufferLiveSlotRow({
       context,
       encodedTarget: input.material.encodedTarget,
@@ -444,6 +457,7 @@ const buildPublicationRows = (input: {
       vector,
     }))
   }
+
   return rows
 }
 
@@ -508,27 +522,35 @@ const publicationMeasurements = (
   let largestDocumentBytes = 0
   let largestAttributeBytes = 0
   let largestFilterableValueBytes = 0
+
   const filterableAttributes = new Set<string>(
     TurbopufferFilterableAttributes,
   )
+
   for (const row of rows) {
     const encodedDocument = JSON.stringify(row)
+
     if (encodedDocument === undefined) {
       throw new Error("A Turbopuffer publication row failed to encode")
     }
+
     const decodedDocument: unknown = JSON.parse(encodedDocument)
+
     const document = Schema.decodeUnknownSync(JsonObjectSchema)(
       decodedDocument,
     )
+
     largestDocumentBytes = Math.max(
       largestDocumentBytes,
       new TextEncoder().encode(encodedDocument).byteLength,
     )
+
     for (const [name, attribute] of Object.entries(document)) {
       largestAttributeBytes = Math.max(
         largestAttributeBytes,
         jsonBytes(attribute),
       )
+
       if (filterableAttributes.has(name)) {
         largestFilterableValueBytes = Math.max(
           largestFilterableValueBytes,
@@ -537,6 +559,7 @@ const publicationMeasurements = (
       }
     }
   }
+
   return {
     requestBytes: new TextEncoder().encode(
       JSON.stringify(writeRequest(rows, config)),
@@ -553,6 +576,7 @@ const capacityFailure = (
   operation: ProjectionIndexStoreFailed["operation"],
 ): ProjectionIndexStoreFailed => {
   const measurements = publicationMeasurements(rows, config)
+
   const limit = measurements.largestFilterableValueBytes >
       TurbopufferMaximumFilterableValueBytes
     ? {
@@ -574,6 +598,7 @@ const capacityFailure = (
           bytes: measurements.requestBytes,
           maximumBytes: config.maximumPublicationBytes,
         }
+
   return indexFailure(
     operation,
     "capacity_exceeded",
@@ -591,6 +616,7 @@ const assertPublicationFits = (
   operation: ProjectionIndexStoreFailed["operation"],
 ): Effect.Effect<void, ProjectionIndexStoreFailed> => {
   const measurements = publicationMeasurements(rows, config)
+
   if (
     rows.length - 1 > config.maximumSlotsPerRevision ||
     measurements.requestBytes > config.maximumPublicationBytes ||
@@ -601,6 +627,7 @@ const assertPublicationFits = (
   ) {
     return Effect.fail(capacityFailure(config, rows, operation))
   }
+
   return Effect.void
 }
 
@@ -638,7 +665,7 @@ const finalizeVisiblePublication = Effect.fn(
 }) {
   return yield* input.coordinator.finalizePublication(input.lease).pipe(
     Effect.mapError((error) =>
-      error instanceof ProjectionPublicationSuperseded
+      Schema.is(ProjectionPublicationSuperseded)(error)
         ? indexFailure(
             input.lease.intent._tag === "Replace"
               ? "replace_revision"
@@ -673,11 +700,13 @@ const reconcilePublicationMarker = Effect.fn(
   const operation = input.lease.intent._tag === "Replace"
     ? "replace_revision"
     : "delete_revision"
+
   const markerId = makeTurbopufferMarkerRowId({
     partitionIdentity: input.client.partition.identity,
     documentKey: input.lease.intent.key.documentKey,
     projection: input.lease.intent.key.projection,
   })
+
   const response = yield* input.client.query({
     filters: ["And", [
       ["id", "Eq", markerId],
@@ -697,28 +726,34 @@ const reconcilePublicationMarker = Effect.fn(
     Effect.mapError((error) =>
       indexFailure(operation, "publication_in_doubt", error)),
   )
+
   const rows = yield* decodeEnvelopeRows(response, "query").pipe(
     Effect.mapError((error) =>
       indexFailure(operation, "publication_in_doubt", error)),
   )
+
   const row = rows[0]
+
   if (row === undefined) {
-    return yield* Effect.fail(indexFailure(
+    return yield* indexFailure(
       operation,
       "publication_in_doubt",
       "The publication marker is not yet visible",
-    ))
+    )
   }
+
   const marker = yield* Schema.decodeUnknownEffect(MarkerResultRowSchema)(row)
     .pipe(Effect.mapError((cause) =>
       indexFailure(operation, "invalid_stored_state", cause)))
+
   if (marker.partition_id !== input.client.partition.identity) {
-    return yield* Effect.fail(indexFailure(
+    return yield* indexFailure(
       operation,
       "invalid_stored_state",
       "The publication marker belongs to another workspace partition",
-    ))
+    )
   }
+
   if (
     marker.publication_generation === input.lease.generation &&
     marker.publication_id === input.lease.publicationId &&
@@ -729,6 +764,7 @@ const reconcilePublicationMarker = Effect.fn(
       coordinator: input.coordinator,
     })
   }
+
   if (
     marker.publication_generation > input.lease.generation ||
     (marker.publication_generation === input.lease.generation &&
@@ -737,17 +773,19 @@ const reconcilePublicationMarker = Effect.fn(
     yield* input.coordinator.supersedePublication(input.lease).pipe(
       Effect.mapError((error) => coordinatorFailure(operation, error)),
     )
-    return yield* Effect.fail(indexFailure(
+
+    return yield* indexFailure(
       operation,
       "invalid_stored_state",
       "A newer or competing publication fenced this lease",
-    ))
+    )
   }
-  return yield* Effect.fail(indexFailure(
+
+  return yield* indexFailure(
     operation,
     "publication_in_doubt",
     "The publication marker does not prove the pending lease visible",
-  ))
+  )
 })
 
 const publishLease = Effect.fn(
@@ -762,8 +800,10 @@ const publishLease = Effect.fn(
   const operation = input.lease.intent._tag === "Replace"
     ? "replace_revision"
     : "delete_revision"
+
   const rows = buildPublicationRows(input)
   yield* assertPublicationFits(input.config, rows, operation)
+
   const attempt = yield* input.client.write(
     writeRequest(rows, input.config),
   ).pipe(
@@ -779,6 +819,7 @@ const publishLease = Effect.fn(
         // not prove that another attempt cannot still publish and finalize it.
         return Effect.fail(providerFailure(operation, error))
       }
+
       return reconcilePublicationMarker({
         lease: input.lease,
         client: input.client,
@@ -789,19 +830,23 @@ const publishLease = Effect.fn(
       })))
     }),
   )
+
   if (attempt._tag === "Reconciled") {
     return attempt.outcome
   }
+
   const decoded = yield* decodeWriteResponse(attempt.response).pipe(
     Effect.mapError((error) =>
       indexFailure(operation, "invalid_stored_state", error)),
   )
+
   if (decoded.rows_affected === rows.length) {
     return yield* finalizeVisiblePublication({
       lease: input.lease,
       coordinator: input.coordinator,
     })
   }
+
   if (decoded.rows_affected === 0) {
     return yield* reconcilePublicationMarker({
       lease: input.lease,
@@ -809,7 +854,8 @@ const publishLease = Effect.fn(
       coordinator: input.coordinator,
     })
   }
-  return yield* Effect.fail(indexFailure(
+
+  return yield* indexFailure(
     operation,
     "invalid_stored_state",
     new InvalidTurbopufferResponse({
@@ -820,7 +866,7 @@ const publishLease = Effect.fn(
         actual: decoded.rows_affected,
       },
     }),
-  ))
+  )
 })
 
 /** Build the projection-index service backed by D1 coordination and TP rows. */
@@ -841,16 +887,18 @@ export const makeTurbopufferProjectionIndexStore = (
             reason: "invalid_value",
           }),
   })
+
   const coordinator = yield* ProjectionPublicationCoordinator
   const client = yield* TurbopufferClient
+
   if (
     !turbopufferWorkspacePartitionsEqual(config.partition, client.partition) ||
     coordinator.indexGeneration !== config.partition.d1IndexGeneration
   ) {
-    return yield* Effect.fail(new InvalidTurbopufferConfiguration({
+    return yield* new InvalidTurbopufferConfiguration({
       field: "partition",
       reason: "mismatch",
-    }))
+    })
   }
 
   const replaceAttempt = (
@@ -864,12 +912,13 @@ export const makeTurbopufferProjectionIndexStore = (
         replacement.embeddingProfile,
         config.embeddingProfile,
       )) {
-        return yield* Effect.fail(indexFailure(
+        return yield* indexFailure(
           "replace_revision",
           "invalid_replacement",
           "The replacement embedding profile does not match the namespace",
-        ))
+        )
       }
+
       const [[lookup], [headLookup]] = yield* Effect.all([
         coordinator.loadRevisions([replacement.key]),
         coordinator.loadHeads([replacement.key]),
@@ -877,13 +926,17 @@ export const makeTurbopufferProjectionIndexStore = (
         Effect.mapError((error) =>
           coordinatorFailure("replace_revision", error)),
       )
+
       const current = lookup?.revision ?? Option.none()
+
       const suppliedContent = new Set(
         replacement.embeddings.map((embedding) => embedding.contentHash),
       )
+
       const needsReusableVectors = replacement.chunks.some((chunk) =>
         !suppliedContent.has(chunk.contentHash),
       )
+
       // A never-published or deleted head has no provider vectors to reuse.
       // Skipping this query is what lets the following write bootstrap a new
       // namespace with its pinned schema.
@@ -901,45 +954,54 @@ export const makeTurbopufferProjectionIndexStore = (
                     error,
                   )),
           )
+
       const plan = planProjectedRevisionReplacement(
         replacement,
         reusableVectors,
       )
+
       if (Result.isFailure(plan)) {
-        return yield* Effect.fail(indexFailure(
+        return yield* indexFailure(
           "replace_revision",
           "invalid_replacement",
           plan.failure,
-        ))
+        )
       }
+
       const requiredSlotHighWater = replacement.chunks.reduce(
         (maximum, chunk) => Math.max(maximum, chunk.ordinal + 1),
         0,
       )
+
       const inheritedSlotHighWater = Option.isSome(headLookup?.head ?? Option.none())
         ? Option.getOrThrow(headLookup?.head ?? Option.none()).slotHighWater
         : 0
+
       const slotHighWater = Math.max(
         inheritedSlotHighWater,
         requiredSlotHighWater,
       )
+
       if (slotHighWater > config.maximumSlotsPerRevision) {
-        return yield* Effect.fail(indexFailure(
+        return yield* indexFailure(
           "replace_revision",
           "capacity_exceeded",
           { slotHighWater, limit: config.maximumSlotsPerRevision },
-        ))
+        )
       }
+
       const previous = new Set(
         Option.match(current, {
           onNone: () => [],
           onSome: (snapshot) => snapshot.chunks.map((chunk) => chunk.chunkId),
         }),
       )
+
       const counts = countProjectedRevisionReplacement(
         previous,
         plan.success.chunkIds,
       )
+
       const identity = replacementIdentity({
         replacement,
         slotHighWater,
@@ -947,10 +1009,13 @@ export const makeTurbopufferProjectionIndexStore = (
         schemaGeneration: config.schemaGeneration,
         namespace: client.partition.namespace,
       })
-      const token = Schema.decodeSync(IndexRevisionTokenSchema)(
+
+      const token = IndexRevisionTokenSchema.make(
         `turbopuffer:${identity.mutationId}`,
       )
+
       const [firstChunk, ...remainingChunks] = replacement.chunks
+
       const snapshot: IndexedRevisionSnapshot = {
         token,
         revisionHash: replacement.revisionHash,
@@ -966,6 +1031,7 @@ export const makeTurbopufferProjectionIndexStore = (
           })),
         ],
       }
+
       const intent: ProjectionPublicationIntent = {
         _tag: "Replace",
         key: replacement.key,
@@ -984,6 +1050,7 @@ export const makeTurbopufferProjectionIndexStore = (
         maximumSlotHighWater: config.maximumSlotsPerRevision,
         commit: { token, ...counts },
       }
+
       const material: PublicationMaterial = {
         encodedTarget: replacement.encodedTarget,
         projectionVersion: replacement.projectionVersion,
@@ -992,6 +1059,7 @@ export const makeTurbopufferProjectionIndexStore = (
         chunks: replacement.chunks,
         vectors: plan.success.vectors,
       }
+
       const provisional = provisionalLease(intent)
       yield* assertPublicationFits(
         config,
@@ -1003,37 +1071,43 @@ export const makeTurbopufferProjectionIndexStore = (
         buildPublicationRows({ lease: provisional, material: undefined, config }),
         "replace_revision",
       )
+
       const beginResult = yield* coordinator.beginPublication(intent).pipe(
         Effect.result,
       )
+
       if (Result.isFailure(beginResult)) {
         const error = beginResult.failure
-        if (error instanceof ProjectionPublicationPlanStale) {
+
+        if (Schema.is(ProjectionPublicationPlanStale)(error)) {
           return remainingPlanRetries > 0
             ? yield* replaceAttempt(replacement, remainingPlanRetries - 1)
-            : yield* Effect.fail(indexFailure(
+            : yield* indexFailure(
                 "replace_revision",
                 "publication_in_progress",
                 error,
-              ))
+              )
         }
-        return yield* Effect.fail(
-          error instanceof ProjectionIndexConflict
-            ? error
-            : coordinatorFailure("replace_revision", error),
-        )
+
+        return yield* (Schema.is(ProjectionIndexConflict)(error)
+          ? error
+          : coordinatorFailure("replace_revision", error))
       }
+
       const begun = beginResult.success
+
       if (begun._tag === "AlreadyCommitted") {
         if (begun.outcome._tag !== "Replaced") {
-          return yield* Effect.fail(indexFailure(
+          return yield* indexFailure(
             "replace_revision",
             "invalid_stored_state",
             "A replacement mutation resolved to a deletion outcome",
-          ))
+          )
         }
+
         return begun.outcome.commit
       }
+
       const outcome = yield* publishLease({
         lease: begun.lease,
         material,
@@ -1041,13 +1115,15 @@ export const makeTurbopufferProjectionIndexStore = (
         client,
         coordinator,
       })
+
       if (outcome._tag !== "Replaced") {
-        return yield* Effect.fail(indexFailure(
+        return yield* indexFailure(
           "replace_revision",
           "invalid_stored_state",
           "A replacement publication finalized as deleted",
-        ))
+        )
       }
+
       return outcome.commit
     })
 
@@ -1065,8 +1141,10 @@ export const makeTurbopufferProjectionIndexStore = (
       ], { concurrency: "unbounded" }).pipe(
         Effect.mapError((error) => coordinatorFailure("delete_revision", error)),
       )
+
       const current = lookup?.revision ?? Option.none()
       const expectedToken = Option.map(current, (snapshot) => snapshot.token)
+
       const deletion: ProjectionIndexDeletion = Option.match(current, {
         onNone: () => ({ deletedRevisions: 0, deletedChunks: 0 }),
         onSome: (snapshot) => ({
@@ -1074,16 +1152,19 @@ export const makeTurbopufferProjectionIndexStore = (
           deletedChunks: snapshot.chunks.length,
         }),
       })
+
       const inheritedSlotHighWater = Option.isSome(headLookup?.head ?? Option.none())
         ? Option.getOrThrow(headLookup?.head ?? Option.none()).slotHighWater
         : 0
+
       if (inheritedSlotHighWater > config.maximumSlotsPerRevision) {
-        return yield* Effect.fail(indexFailure(
+        return yield* indexFailure(
           "delete_revision",
           "capacity_exceeded",
           { inheritedSlotHighWater, limit: config.maximumSlotsPerRevision },
-        ))
+        )
       }
+
       const identity = deletionIdentity({
         key,
         expectedToken,
@@ -1091,6 +1172,7 @@ export const makeTurbopufferProjectionIndexStore = (
         config,
         namespace: client.partition.namespace,
       })
+
       const intent: ProjectionPublicationIntent = {
         _tag: "Delete",
         key,
@@ -1101,45 +1183,54 @@ export const makeTurbopufferProjectionIndexStore = (
         slotHighWater: inheritedSlotHighWater,
         maximumSlotHighWater: config.maximumSlotsPerRevision,
       }
+
       const provisional = provisionalLease(intent)
       yield* assertPublicationFits(
         config,
         buildPublicationRows({ lease: provisional, material: undefined, config }),
         "delete_revision",
       )
+
       const beginResult = yield* coordinator.beginPublication(intent).pipe(
         Effect.result,
       )
+
       if (Result.isFailure(beginResult)) {
         const error = beginResult.failure
+
         if (
-          error instanceof ProjectionPublicationPlanStale ||
-          error instanceof ProjectionIndexConflict
+          Schema.is(ProjectionPublicationPlanStale)(error) ||
+          Schema.is(ProjectionIndexConflict)(error)
         ) {
           return remainingAttempts > 0
             ? yield* deleteAttempt(key, remainingAttempts - 1)
-            : yield* Effect.fail(indexFailure(
+            : yield* indexFailure(
                 "delete_revision",
                 "publication_in_progress",
                 error,
-              ))
+              )
         }
-        return yield* Effect.fail(coordinatorFailure(
+
+        return yield* coordinatorFailure(
           "delete_revision",
           error,
-        ))
+        )
       }
+
       const begun = beginResult.success
+
       if (begun._tag === "AlreadyCommitted") {
         if (begun.outcome._tag !== "Deleted") {
-          return yield* Effect.fail(indexFailure(
+          return yield* indexFailure(
             "delete_revision",
             "invalid_stored_state",
             "A deletion mutation resolved to a replacement outcome",
-          ))
+          )
         }
+
         return begun.outcome.deletion
       }
+
       const outcome = yield* publishLease({
         lease: begun.lease,
         material: undefined,
@@ -1147,13 +1238,15 @@ export const makeTurbopufferProjectionIndexStore = (
         client,
         coordinator,
       })
+
       if (outcome._tag !== "Deleted") {
-        return yield* Effect.fail(indexFailure(
+        return yield* indexFailure(
           "delete_revision",
           "invalid_stored_state",
           "A deletion publication finalized as a replacement",
-        ))
+        )
       }
+
       return outcome.deletion
     })
 
@@ -1167,11 +1260,13 @@ export const makeTurbopufferProjectionIndexStore = (
       const keys = yield* coordinator.listStaleRevisions(input).pipe(
         Effect.mapError((error) => coordinatorFailure("prune_graph", error)),
       )
+
       const deletions = yield* Effect.forEach(
         keys,
         (key) => deleteAttempt(key, 3),
         { concurrency: 1 },
       )
+
       return sumProjectionPrune(deletions)
     }),
   }

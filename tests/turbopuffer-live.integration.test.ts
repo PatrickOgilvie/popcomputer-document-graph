@@ -20,6 +20,7 @@ interface LiveTurbopufferConfig {
 
 const nonBlank = (value: string | undefined): string | undefined => {
   if (value === undefined || value.trim() === "") return undefined
+
   return value
 }
 
@@ -27,21 +28,26 @@ const liveTurbopufferConfig = (): LiveTurbopufferConfig | undefined => {
   if (Bun.env.RUN_DOCUMENT_GRAPH_TURBOPUFFER_TESTS !== "true") {
     return undefined
   }
+
   const apiKeyValue = nonBlank(Bun.env.TURBOPUFFER_API_KEY)
   const deploymentId = nonBlank(Bun.env.TURBOPUFFER_DEPLOYMENT_ID)
   const region = nonBlank(Bun.env.TURBOPUFFER_REGION)
   const baseURL = nonBlank(Bun.env.TURBOPUFFER_BASE_URL)
+
   if (apiKeyValue === undefined) {
     throw new Error(
       "Live Turbopuffer conformance requires TURBOPUFFER_API_KEY",
     )
   }
+
   if (deploymentId === undefined) {
     throw new Error(
       "Live Turbopuffer conformance requires TURBOPUFFER_DEPLOYMENT_ID",
     )
   }
+
   const apiKey = Redacted.make(apiKeyValue)
+
   if (region !== undefined && baseURL === undefined) {
     return {
       apiKey,
@@ -49,6 +55,7 @@ const liveTurbopufferConfig = (): LiveTurbopufferConfig | undefined => {
       endpoint: { _tag: "Region", region },
     }
   }
+
   if (baseURL !== undefined && region === undefined) {
     return {
       apiKey,
@@ -56,6 +63,7 @@ const liveTurbopufferConfig = (): LiveTurbopufferConfig | undefined => {
       endpoint: { _tag: "Custom", baseURL },
     }
   }
+
   throw new Error(
     "Live Turbopuffer conformance requires exactly one of TURBOPUFFER_REGION or TURBOPUFFER_BASE_URL",
   )
@@ -124,6 +132,7 @@ if (config === undefined) {
         version: "v1",
         dimensions: 3,
       })
+
       const partition = makeTurbopufferWorkspacePartition({
         workspace:
           `live-conformance-${Date.now()}-${crypto.randomUUID()}`,
@@ -132,10 +141,12 @@ if (config === undefined) {
         embeddingProfile: profile,
         schemaGeneration: 1,
       })
+
       const client = makeOfficialTurbopufferClient({
         apiKey: config.apiKey,
         partition,
       })
+
       let conformanceFailure: Error | undefined
       let cleanupFailure: Error | undefined
 
@@ -173,11 +184,13 @@ if (config === undefined) {
             ],
           }),
         ))
+
         expect(initialWrite.rows_affected).toBe(2)
 
         const inspected = Schema.decodeUnknownSync(
           NamespaceSchemaResponseSchema,
         )(await Effect.runPromise(client.inspectSchema()))
+
         expect(inspected.vector.type).toBe("[3]f32")
         expect(inspected.content.type).toBe("string")
         expect(inspected.version.type).toBe("uint")
@@ -190,6 +203,7 @@ if (config === undefined) {
             consistency: { level: "strong" },
           }),
         ))
+
         expect(semantic.rows[0]?.id).toBe("alpha")
 
         const hybridChannels = decodeMultiQueryResponse(
@@ -209,6 +223,7 @@ if (config === undefined) {
             consistency: { level: "strong" },
           })),
         )
+
         expect(hybridChannels.results).toHaveLength(2)
         expect(hybridChannels.results[0]?.rows[0]?.id).toBe("alpha")
         expect(hybridChannels.results[1]?.rows).not.toHaveLength(0)
@@ -223,6 +238,7 @@ if (config === undefined) {
             }],
           }),
         ))
+
         expect(overwrite.rows_affected).toBe(1)
 
         const overwritten = decodeQueryResponse(await Effect.runPromise(
@@ -234,6 +250,7 @@ if (config === undefined) {
             consistency: { level: "strong" },
           }),
         ))
+
         expect(overwritten.rows).toEqual([expect.objectContaining({
           id: "alpha",
           content: "overwritten authoritative document",
@@ -243,6 +260,7 @@ if (config === undefined) {
         const deletion = decodeWriteResponse(await Effect.runPromise(
           client.write({ deletes: ["beta"] }),
         ))
+
         expect(deletion.rows_affected).toBe(1)
 
         const remaining = decodeQueryResponse(await Effect.runPromise(
@@ -253,6 +271,7 @@ if (config === undefined) {
             consistency: { level: "strong" },
           }),
         ))
+
         expect(remaining.rows.map((row) => row.id)).toEqual(["alpha"])
       } catch (cause: unknown) {
         conformanceFailure = errorFromCause(
@@ -269,13 +288,16 @@ if (config === undefined) {
           )
         }
       }
+
       if (conformanceFailure !== undefined && cleanupFailure !== undefined) {
         throw new AggregateError(
           [conformanceFailure, cleanupFailure],
           "Live Turbopuffer conformance and namespace cleanup failed",
         )
       }
+
       if (conformanceFailure !== undefined) throw conformanceFailure
+
       if (cleanupFailure !== undefined) throw cleanupFailure
     }, 120_000)
   })

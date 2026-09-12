@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { defineEmbeddingProfile } from "../src/indexing/embedding-provider.js"
 import {
   TurbopufferClient,
@@ -13,6 +13,7 @@ import {
 import { makeTurbopufferWorkspacePartition } from "../src/storage/turbopuffer/partition.js"
 
 const unused = () => Effect.die(new Error("Unexpected provider operation"))
+
 const deployment = {
   deploymentId: "test:turbopuffer-namespace",
   endpoint: { _tag: "Region" as const, region: "gcp-us-central1" },
@@ -22,17 +23,20 @@ describe("Turbopuffer namespace administration", () => {
   test("keeps schema updates, inspection, and destruction explicit", async () => {
     const updates: Array<unknown> = []
     let destroyed = 0
+
     const profile = defineEmbeddingProfile({
       id: "test:namespace-administration",
       version: "v1",
       dimensions: 3,
     })
+
     const partition = makeTurbopufferWorkspacePartition({
       ...deployment,
       workspace: "namespace-administration-test",
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const client: TurbopufferClientService = {
       partition,
       write: unused,
@@ -43,21 +47,25 @@ describe("Turbopuffer namespace administration", () => {
       }),
       updateSchema: (request) => {
         updates.push(request)
+
         return Effect.succeed({})
       },
       destroyNamespace: () => {
         destroyed += 1
+
         return Effect.succeed({})
       },
     }
+
     const inspection = await Effect.runPromise(
       Effect.gen(function*() {
         yield* updateTurbopufferNamespaceSchema()
         const inspected = yield* inspectTurbopufferNamespaceSchema
         yield* destroyTurbopufferNamespace
+
         return inspected
       }).pipe(
-        Effect.provide(Layer.succeed(TurbopufferClient, client)),
+        Effect.provideService(TurbopufferClient, client),
       ),
     )
 

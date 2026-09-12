@@ -18,7 +18,7 @@ import {
   type ProjectionRevisionHash,
 } from "./document-identity.js"
 import {
-  InvalidDocumentValue,
+  type InvalidDocumentValue,
   parseDocumentInstance,
   type EncodedDocumentReference,
   type ParsedDocumentInstance,
@@ -352,6 +352,7 @@ const parseProjectionMetadata = (
       }
 
       const sectionKeys = new Set<string>()
+
       for (const section of sections) {
         if (sectionKeys.has(section.key)) {
           return Effect.fail(
@@ -412,6 +413,7 @@ const chunkProjectedDocument = (
           content: section.content,
         },
       }
+
       const output = yield* Effect.try({
         try: () => projection.chunking.chunk(input),
         catch: () =>
@@ -422,6 +424,7 @@ const chunkProjectedDocument = (
             "invalid_output",
           ),
       })
+
       const fragments = yield* Schema.decodeUnknownEffect(
         Schema.toType(ChunkerOutputSchema),
       )(output, { onExcessProperty: "error" }).pipe(
@@ -438,17 +441,16 @@ const chunkProjectedDocument = (
       for (const [sectionPart, fragment] of fragments.entries()) {
         const embeddingContent =
           fragment.embeddingContent ?? fragment.content
+
         if (
           embeddingContent.length >
           projection.chunking.maximumCharacters
         ) {
-          return yield* Effect.fail(
-            documentChunkingError(
-              graph,
-              documentKind,
-              projection.id,
-              "chunk_exceeds_maximum",
-            ),
+          return yield* documentChunkingError(
+            graph,
+            documentKind,
+            projection.id,
+            "chunk_exceeds_maximum",
           )
         }
 
@@ -517,6 +519,7 @@ const identifyChunks = (
     }),
     contentHash: makeContentHash(chunk.embeddingContent),
   }))
+
   const revisionHash = makeProjectionRevisionHash({
     documentKey,
     projection: {
@@ -542,6 +545,7 @@ const identifyChunks = (
       metadata: chunk.metadata,
     })),
   })
+
   return EffectArray.map(withChunkIdentity, (chunk) => ({
     ...chunk,
     revisionHash,
@@ -569,6 +573,7 @@ export const projectParsedDocument = <
   InvalidVectorProjectionOutput | DocumentChunkingFailed
 > => {
   const definition = documents[documentKind]
+
   if (definition === undefined) {
     return Effect.die(
       new Error(
@@ -603,9 +608,11 @@ export const projectParsedDocument = <
       Documents,
       Kind
     >
+
     const output = yield* Effect.sync(() =>
       projection.select(document.value),
     )
+
     const projectedDocument = yield* Schema.decodeEffect(
       Schema.toType(ProjectedDocumentOutputSchema),
     )(output, { onExcessProperty: "error" }).pipe(
@@ -618,12 +625,14 @@ export const projectParsedDocument = <
         ),
       ),
     )
+
     const parsedDocument = yield* parseProjectionMetadata(
       graph,
       documentKind,
       projection,
       projectedDocument,
     )
+
     const chunks = yield* chunkProjectedDocument(
       graph,
       documentKind,
@@ -631,6 +640,7 @@ export const projectParsedDocument = <
       projection,
       parsedDocument,
     )
+
     const identifiedChunks = identifyChunks(
       document.documentKey,
       projection,
@@ -674,6 +684,7 @@ export const projectDocument = <
   ProjectDocumentError
 > => {
   const definition = documents[documentKind]
+
   if (definition === undefined) {
     return Effect.die(
       new Error(

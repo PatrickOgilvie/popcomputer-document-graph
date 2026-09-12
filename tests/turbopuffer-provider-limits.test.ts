@@ -33,6 +33,7 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 2,
 })
+
 const partition = makeTurbopufferWorkspacePartition({
   workspace: "provider-limits",
   deploymentId: "test-account/main",
@@ -55,6 +56,7 @@ const coordinator: ProjectionPublicationCoordinatorService = {
   }))),
   beginPublication: () => {
     publicationBegins += 1
+
     return Effect.die("Publication must not begin for an oversized mutation")
   },
   finalizePublication: () => Effect.die("Unexpected finalization"),
@@ -92,6 +94,7 @@ const replacementWithSectionKey = (
   graph = "contracts",
 ): ReplaceProjectedRevision => {
   const contentHash = Schema.decodeSync(ContentHashSchema)("b".repeat(64))
+
   const chunk: ProjectedChunkRecord = {
     chunkId: Schema.decodeSync(ChunkIdSchema)("c".repeat(64)),
     contentHash,
@@ -108,6 +111,7 @@ const replacementWithSectionKey = (
     },
     metadata: undefined,
   }
+
   return {
     key: {
       documentKey: makeDocumentKey({
@@ -161,9 +165,11 @@ describe("Turbopuffer provider limits", () => {
 
   test("rejects an oversized attribute before beginning D1 publication", async () => {
     publicationBegins = 0
+
     const store = await makeStore({
       maximumPublicationBytes: 32 * 1_024 * 1_024,
     })
+
     const oversized = "s".repeat(TurbopufferMaximumAttributeBytes)
 
     await expect(Effect.runPromise(
@@ -182,6 +188,7 @@ describe("Turbopuffer provider limits", () => {
   test("rejects an oversized filterable value before beginning D1 publication", async () => {
     publicationBegins = 0
     const store = await makeStore()
+
     const oversizedGraph = "g".repeat(
       TurbopufferMaximumFilterableValueBytes,
     )

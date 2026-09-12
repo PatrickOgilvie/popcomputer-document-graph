@@ -9,14 +9,17 @@ function isTypeAssertionExpression(node: ESTree.Node): node is TypeAssertionExpr
 
 function unwrapParenthesizedExpression(expression: ESTree.Expression): ESTree.Expression {
   let current = expression;
+
   while (current.type === "ParenthesizedExpression") {
     current = current.expression;
   }
+
   return current;
 }
 
 function isConstAssertion(node: TypeAssertionExpression): boolean {
   const { typeAnnotation } = node;
+
   return (
     typeAnnotation.type === "TSTypeReference" &&
     typeAnnotation.typeName.type === "Identifier" &&

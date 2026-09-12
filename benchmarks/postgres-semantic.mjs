@@ -14,11 +14,17 @@ import {
 // Build first, then supply TEST_DATABASE_URL. All data lives in temporary
 // tables in this connection; the final rollback leaves the database unchanged.
 assert(process.env.TEST_DATABASE_URL, "TEST_DATABASE_URL is required")
+
 const client = new Client({ connectionString: process.env.TEST_DATABASE_URL })
+
 const documents = 10_000
+
 const dimensions = 1_024
+
 const runs = 5
+
 await client.connect()
+
 try {
   await client.query("BEGIN")
   await client.query("SET LOCAL statement_timeout = 60000")
@@ -43,12 +49,16 @@ try {
   await client.query("ANALYZE projected_chunks")
 
   const queries = []
+
   const transaction = postgresTransactionClient({ query: (text, values) => {
     queries.push({ text, values })
+
     return Promise.resolve({ rows: [] })
   } })
+
   const vector = Array.from({ length: dimensions }, (_, index) => Math.cos(index + 1))
   const selected = Schema.decodeSync(DocumentKeySchema)("1".padStart(64, "0"))
+
   for (const target of [undefined, documentKeys([selected])]) {
     await Effect.runPromise(ProjectionSearchStore.pipe(
       Effect.flatMap((store) => store.searchCandidates({
@@ -60,10 +70,12 @@ try {
       Effect.provide(postgresDocumentGraph({ vectorSearch: "float64", transaction, schema: "pg_temp" })),
     ))
   }
+
   const [current, indexed] = queries
   assert(current && indexed)
   const expansion = "FROM unnest(scoped.embedding, $1::double precision[]) AS component(stored, query)"
   assert(current.text.includes(expansion), "Update the benchmark for the new cosine SQL")
+
   // Reconstruct the previous positional-join implementation, keeping every
   // other part of the production query, parameters, data, and plan settings equal.
   const previous = {
@@ -73,30 +85,39 @@ try {
       .replace(expansion, `FROM unnest(scoped.embedding) WITH ORDINALITY AS stored(value, ordinal)
         INNER JOIN unnest($1::double precision[]) WITH ORDINALITY AS query(value, ordinal) USING (ordinal)`),
   }
+
   const cast = {
     ...indexed,
     text: indexed.text.replace(/r.document_key = ANY\((\$\d+)::char\(64\)\[\]\)/,
       "r.document_key::text = ANY($1::text[])"),
   }
+
   assert.notEqual(cast.text, indexed.text, "Update the benchmark for the new target SQL")
+
   const cases = [
     { name: "cosine_previous", query: previous, samples: [] },
     { name: "cosine_current", query: current, samples: [] },
     { name: "target_column_cast", query: cast, samples: [] },
     { name: "target_indexed", query: indexed, samples: [] },
   ]
+
   const plans = new Map()
+
   for (let iteration = 0; iteration <= runs; iteration += 1) {
     const ordered = iteration % 2 === 0 ? cases : [...cases].reverse()
+
     for (const item of ordered) {
       const result = await client.query(
         `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${item.query.text}`, item.query.values,
       )
+
       const plan = result.rows[0]["QUERY PLAN"][0]
+
       if (iteration > 0) item.samples.push(plan["Execution Time"])
       plans.set(item.name, plan)
     }
   }
+
   const oldRows = await client.query(previous.text, previous.values)
   const newRows = await client.query(current.text, current.values)
   assert.deepEqual(newRows.rows, oldRows.rows, "Cosine scores or ranking changed")

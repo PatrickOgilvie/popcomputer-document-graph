@@ -17,6 +17,7 @@ import { verifyDocumentGraphStorageConformance } from "../src/testing.js"
 const databaseUrl =
   Bun.env.TEST_DATABASE_URL ??
   Bun.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
+
 const runIntegrationTests =
   Bun.env.RUN_DOCUMENT_GRAPH_POSTGRES_TESTS === "true" &&
   databaseUrl !== undefined
@@ -24,7 +25,9 @@ const runIntegrationTests =
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("PostgresArticleId"),
 )
+
 const Visibility = Schema.Literals(["public", "private"])
+
 const Article = Schema.Struct({
   id: ArticleId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -38,6 +41,7 @@ const Article = Schema.Struct({
     }),
   ),
 })
+
 const ArticleDocument = defineDocument({
   id: ArticleId,
   value: Article,
@@ -52,6 +56,7 @@ const ArticleDocument = defineDocument({
   },
   select: (article) => {
     const [first, ...rest] = article.sections
+
     return {
       context: article.title,
       sections: [
@@ -72,6 +77,7 @@ const ArticleDocument = defineDocument({
   },
   chunking: sectionChunking({ maximumCharacters: 256 }),
 })
+
 const graph = defineDocumentGraph({
   id: "postgres-contract",
   documents: { Article: ArticleDocument },
@@ -84,8 +90,11 @@ const graph = defineDocumentGraph({
     }),
   }),
 })
+
 const ArticleNode = graph.document("Article")
+
 const ArticleContent = ArticleNode.projection("article-content")
+
 const profile = defineEmbeddingProfile({
   id: "test:postgres",
   version: "v1",
@@ -105,6 +114,7 @@ const migrateInSchema = async (
       new URL(`../migrations/postgres/${file}`, import.meta.url),
       "utf8",
     )
+
     await pool.query(
       migration.replaceAll('"honertia_document_graph"', `"${schema}"`),
     )
@@ -117,6 +127,7 @@ describe("postgresDocumentGraph", () => {
       "reuses vectors, replaces complete revisions, and searches within scope",
       () => undefined,
     )
+
     return
   }
 
@@ -126,10 +137,12 @@ describe("postgresDocumentGraph", () => {
       const schema = `document_graph_${crypto.randomUUID().replaceAll("-", "")}`
       const pool = new Pool({ connectionString: databaseUrl, max: 4 })
       const embeddedBatches: Array<ReadonlyArray<string>> = []
+
       const embeddings: EmbeddingProviderService = {
         profile,
         embedDocuments: (requests) => {
           embeddedBatches.push(requests.map((request) => request.content))
+
           return Effect.succeed(
             requests.map((request) => ({
               contentHash: request.contentHash,
@@ -141,9 +154,11 @@ describe("postgresDocumentGraph", () => {
         },
         embedQuery: () => Effect.succeed([1, 0]),
       }
+
       const articleId = Schema.decodeSync(ArticleId)(
         "99999999-9999-4999-8999-999999999999",
       )
+
       const article = (
         sections: Schema.Schema.Type<typeof Article>["sections"],
         relatedIds: Schema.Schema.Type<typeof Article>["relatedIds"] = [],
@@ -157,10 +172,12 @@ describe("postgresDocumentGraph", () => {
 
       try {
         await migrateInSchema(pool, schema)
+
         const live = Layer.mergeAll(
           Layer.succeed(EmbeddingProvider, embeddings),
           postgresDocumentGraph({ pool, schema }),
         )
+
         const initial = article([
           {
             id: "secret",
@@ -175,6 +192,7 @@ describe("postgresDocumentGraph", () => {
             visibility: "public",
           },
         ])
+
         const metadataOnly = article([
           {
             id: "secret",
@@ -189,6 +207,7 @@ describe("postgresDocumentGraph", () => {
             visibility: "public",
           },
         ])
+
         const withoutStaleSection = article([
           {
             id: "results",
@@ -202,13 +221,16 @@ describe("postgresDocumentGraph", () => {
           Effect.gen(function*() {
             const conformance =
               yield* verifyDocumentGraphStorageConformance()
+
             const first = yield* ArticleContent.index(initial)
+
             const publicBefore = yield* ArticleContent.search("national", {
               strategy: "semantic",
               where: { visibility: "public" },
               candidates: { semantic: 1 },
               limit: 1,
             })
+
             const textPublicBefore = yield* ArticleContent.search(
               "national",
               {
@@ -218,11 +240,13 @@ describe("postgresDocumentGraph", () => {
                 limit: 1,
               },
             )
+
             const weightedText = yield* ArticleContent.search("launch", {
               strategy: "text",
               candidates: { text: 2 },
               limit: 2,
             })
+
             const booleanText = yield* ArticleContent.search("national", {
               strategy: "text",
               where: (filter) =>
@@ -236,26 +260,33 @@ describe("postgresDocumentGraph", () => {
               candidates: { text: 1 },
               limit: 1,
             })
+
             const emptyLexemes = yield* ArticleContent.search("the and", {
               strategy: "text",
             })
+
             const second = yield* ArticleContent.index(metadataOnly)
+
             const publicAfter = yield* ArticleContent.search("national", {
               strategy: "semantic",
               where: { visibility: "public" },
               candidates: { semantic: 2 },
               limit: 2,
             })
+
             const staleRevision = yield* ArticleContent.project(metadataOnly)
             const store = yield* ProjectionIndexStore
+
             const [staleLookup] = yield* store.loadRevisions([{
               documentKey: staleRevision.documentKey,
               projection: staleRevision.projection.id,
             }])
+
             const staleSnapshot = staleLookup?.revision ?? Option.none()
             const third = yield* ArticleContent.index(withoutStaleSection)
             const finalHits = yield* graph.search("national")
             const [staleFirst, ...staleRest] = staleRevision.chunks
+
             const chunkRecord = (
               chunk: typeof staleFirst,
             ) => ({
@@ -270,6 +301,7 @@ describe("postgresDocumentGraph", () => {
                   text: chunk.text,
                   metadata: chunk.metadata,
             })
+
             const staleWrite = yield* store.replaceRevision({
               key: {
                 documentKey: staleRevision.documentKey,
@@ -290,6 +322,7 @@ describe("postgresDocumentGraph", () => {
               ],
               embeddings: [],
             }).pipe(Effect.result)
+
             return {
               conformance,
               first,
@@ -362,9 +395,11 @@ describe("postgresDocumentGraph", () => {
           "results",
         ])
         expect(Result.isFailure(result.staleWrite)).toBe(true)
+
         if (Result.isFailure(result.staleWrite)) {
           expect(result.staleWrite.failure._tag).toBe("ProjectionIndexConflict")
         }
+
         expect(embeddedBatches).toHaveLength(1)
 
         const persisted = await pool.query<{
@@ -386,6 +421,7 @@ describe("postgresDocumentGraph", () => {
            WHERE r.graph_id = $1`,
           [graph.id],
         )
+
         expect(persisted.rows).toEqual([
           {
             count: "1",
@@ -398,6 +434,7 @@ describe("postgresDocumentGraph", () => {
         ])
 
         let rejectedWrongDimensions = false
+
         try {
           await pool.query(
             `UPDATE "${schema}"."projected_chunks"
@@ -406,20 +443,25 @@ describe("postgresDocumentGraph", () => {
         } catch {
           rejectedWrongDimensions = true
         }
+
         expect(rejectedWrongDimensions).toBe(true)
 
         const transaction = await pool.connect()
+
         try {
           await transaction.query("BEGIN")
+
           const transactionLive = Layer.mergeAll(
             Layer.succeed(EmbeddingProvider, embeddings),
             postgresDocumentGraph({ transaction, schema }),
           )
+
           const removedInsideTransaction = await Effect.runPromise(
             ArticleNode.remove(articleId).pipe(
               Effect.provide(transactionLive),
             ),
           )
+
           expect(removedInsideTransaction).toEqual({
             deletedRevisions: 1,
             deletedChunks: 1,
@@ -433,11 +475,13 @@ describe("postgresDocumentGraph", () => {
         const afterRollback = await Effect.runPromise(
           graph.search("national").pipe(Effect.provide(live)),
         )
+
         expect(afterRollback.map((hit) => hit.sectionKey)).toEqual([
           "results",
         ])
 
         const invalidStoredTransaction = await pool.connect()
+
         try {
           await invalidStoredTransaction.query("BEGIN")
           await invalidStoredTransaction.query(
@@ -453,6 +497,7 @@ describe("postgresDocumentGraph", () => {
                AND r.graph_id = $1`,
             [graph.id],
           )
+
           const invalidStoredLive = Layer.mergeAll(
             Layer.succeed(EmbeddingProvider, embeddings),
             postgresDocumentGraph({
@@ -460,6 +505,7 @@ describe("postgresDocumentGraph", () => {
               schema,
             }),
           )
+
           const invalidStoredResult = await Effect.runPromise(
             ArticleContent.search("national", {
               strategy: "text",
@@ -468,11 +514,14 @@ describe("postgresDocumentGraph", () => {
               Effect.result,
             ),
           )
+
           expect(Result.isFailure(invalidStoredResult)).toBe(true)
+
           if (Result.isFailure(invalidStoredResult)) {
             expect(invalidStoredResult.failure._tag).toBe(
               "DocumentGraphUnavailable",
             )
+
             if (
               invalidStoredResult.failure._tag === "DocumentGraphUnavailable"
             ) {
@@ -481,21 +530,29 @@ describe("postgresDocumentGraph", () => {
               )
               const cause = invalidStoredResult.failure.cause
               expect(cause).toBeInstanceOf(Object)
+
               const causeTag = cause instanceof Object
                 ? Object.getOwnPropertyDescriptor(cause, "_tag")?.value
                 : undefined
+
               expect(causeTag).toBe("ProjectionTextSearchStoreFailed")
+
               const storedCause = cause instanceof Object
                 ? Object.getOwnPropertyDescriptor(cause, "cause")?.value
                 : undefined
+
               expect(storedCause).toBeInstanceOf(Object)
+
               const rowKind = storedCause instanceof Object
                 ? Object.getOwnPropertyDescriptor(storedCause, "rowKind")?.value
                 : undefined
+
               expect(rowKind).toBe("text candidate")
+
               const issues = storedCause instanceof Object
                 ? Object.getOwnPropertyDescriptor(storedCause, "issues")?.value
                 : undefined
+
               expect(Array.isArray(issues)).toBe(true)
               expect(
                 Array.isArray(issues) &&
@@ -519,7 +576,9 @@ describe("postgresDocumentGraph", () => {
         const retiredRevision = await Effect.runPromise(
           ArticleContent.project(withoutStaleSection),
         )
+
         const [retiredFirst, ...retiredRest] = retiredRevision.chunks
+
         const retiredChunk = (chunk: typeof retiredFirst) => ({
           chunkId: chunk.chunkId,
           contentHash: chunk.contentHash,
@@ -532,6 +591,7 @@ describe("postgresDocumentGraph", () => {
                   text: chunk.text,
                   metadata: chunk.metadata,
         })
+
         const lifecycle = await Effect.runPromise(
           Effect.gen(function*() {
             const removed = yield* ArticleNode.remove(articleId)
@@ -559,6 +619,7 @@ describe("postgresDocumentGraph", () => {
             })
             const hidden = yield* graph.search("national")
             const pruned = yield* graph.reconcileIndex()
+
             return { removed, removedAgain, hidden, pruned }
           }).pipe(Effect.provide(live)),
         )
@@ -585,30 +646,37 @@ describe("postgresDocumentGraph", () => {
         const relatedId = Schema.decodeSync(ArticleId)(
           "77777777-7777-4777-8777-777777777777",
         )
+
         const relationLifecycle = await Effect.runPromise(
           Effect.gen(function*() {
             const indexed = yield* ArticleNode.index(
               article(withoutStaleSection.sections, [relatedId]),
             )
+
             const neighbours = yield* ArticleNode.neighbours(articleId, {
               via: "cites",
             })
+
             const incoming = yield* ArticleNode.neighbours(relatedId, {
               via: "cites",
               direction: "incoming",
             })
+
             const replaced = yield* ArticleNode.index(
               article(withoutStaleSection.sections),
             )
+
             const afterReplacement = yield* ArticleNode.neighbours(
               articleId,
               { via: "cites" },
             )
+
             const incomingAfterReplacement =
               yield* ArticleNode.neighbours(relatedId, {
                 via: "cites",
                 direction: "incoming",
               })
+
             return {
               indexed,
               neighbours,
@@ -619,6 +687,7 @@ describe("postgresDocumentGraph", () => {
             }
           }).pipe(Effect.provide(live)),
         )
+
         expect(relationLifecycle.indexed.relations.inserted).toBe(1)
         expect(relationLifecycle.neighbours).toEqual([
           { graph: graph.id, kind: "Article", id: relatedId },

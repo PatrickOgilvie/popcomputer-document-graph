@@ -2,7 +2,7 @@ import { Layer } from "effect"
 import type { ProjectionPublicationCoordinator } from "./indexing/projection-publication.js"
 import { ProjectionIndexStore } from "./indexing/projection-index.js"
 import type { TurbopufferClient } from "./storage/turbopuffer/client.js"
-import {
+import type {
   InvalidTurbopufferConfiguration,
 } from "./storage/turbopuffer/errors.js"
 import {

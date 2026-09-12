@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   Array as EffectArray,
   Effect,
-  Layer,
   Option,
   Result,
   Schema,
@@ -34,6 +33,7 @@ import {
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("ArticleId"),
 )
+
 const ArticleValue = Schema.Struct({
   id: ArticleId,
   sections: Schema.NonEmptyArray(
@@ -44,9 +44,11 @@ const ArticleValue = Schema.Struct({
     }),
   ),
 })
+
 const ArticleMetadata = Schema.Struct({
   visibility: Schema.Literals(["public", "private"]),
 })
+
 const ArticleDocument = defineDocument({
   id: ArticleId,
   value: ArticleValue,
@@ -57,6 +59,7 @@ const ArticleDocument = defineDocument({
   metadata: ArticleMetadata,
   select: (article) => {
     const [first, ...rest] = article.sections
+
     return {
       sections: [
         {
@@ -74,13 +77,16 @@ const ArticleDocument = defineDocument({
   },
   chunking: sectionChunking({ maximumCharacters: 128 }),
 })
+
 const articleGraph = defineDocumentGraph({
   id: "articles",
   documents: { Article: ArticleDocument },
 })
+
 const ArticleSections = articleGraph
   .document("Article")
   .projection("article-sections")
+
 const articleId = Schema.decodeSync(ArticleId)(
   "44444444-4444-4444-8444-444444444444",
 )
@@ -171,6 +177,7 @@ const makeRecordingStore = () => {
           embedded.vector,
         ]),
       )
+
       const reusableVectors = new Map<
         ContentHash,
         ReadonlyArray<number>
@@ -189,6 +196,7 @@ const makeRecordingStore = () => {
       }
 
       const nextChunks: Array<StoredChunk> = []
+
       for (const chunk of replacement.chunks) {
         const vector =
           suppliedVectors.get(chunk.contentHash) ??
@@ -210,21 +218,27 @@ const makeRecordingStore = () => {
       const previousIds = new Set(
         revision?.chunks.map((chunk) => chunk.chunkId) ?? [],
       )
+
       const nextIds = new Set(
         nextChunks.map((chunk) => chunk.chunkId),
       )
+
       const inserted = nextChunks.filter(
         (chunk) => !previousIds.has(chunk.chunkId),
       ).length
+
       const updated = nextChunks.length - inserted
+
       const deleted = Array.from(previousIds).filter(
         (chunkId) => !nextIds.has(chunkId),
       ).length
 
       tokenSequence += 1
+
       const token = Schema.decodeSync(IndexRevisionTokenSchema)(
         `revision-${tokenSequence}`,
       )
+
       commits.push(replacement)
       revision = {
         token,
@@ -263,6 +277,7 @@ const makeRecordingStore = () => {
     duplicateFirstSnapshotChunk: () => {
       if (revision === undefined) return
       const [first, second, ...rest] = revision.snapshotChunks
+
       if (second === undefined) return
       revision = {
         ...revision,
@@ -281,10 +296,12 @@ const makeRecordingEmbeddings = (
   const batches: Array<
     readonly [EmbeddingRequest, ...ReadonlyArray<EmbeddingRequest>]
   > = []
+
   const service: EmbeddingProviderService = {
     profile,
     embedDocuments: (requests) => {
       batches.push(requests)
+
       return Effect.succeed(
         requests.map(
           (request): EmbeddedContent => ({
@@ -309,12 +326,8 @@ const runIndex = <Revision extends Parameters<
 ) =>
   Effect.runPromise(
     indexProjectedRevision(revision).pipe(
-      Effect.provide(
-        Layer.succeed(EmbeddingProvider, embeddings),
-      ),
-      Effect.provide(
-        Layer.succeed(ProjectionIndexStore, store),
-      ),
+      Effect.provideService(EmbeddingProvider, embeddings),
+      Effect.provideService(ProjectionIndexStore, store),
     ),
   )
 
@@ -328,6 +341,7 @@ describe("indexProjectedRevision", () => {
   test("embeds a new complete revision and skips an identical replay", async () => {
     const store = makeRecordingStore()
     const embeddings = makeRecordingEmbeddings(defaultProfile)
+
     const revision = await Effect.runPromise(
       projectArticle([
         { id: "summary", text: "A summary.", visibility: "public" },
@@ -340,6 +354,7 @@ describe("indexProjectedRevision", () => {
       embeddings.service,
       store.service,
     )
+
     const replay = await runIndex(
       revision,
       embeddings.service,
@@ -365,6 +380,7 @@ describe("indexProjectedRevision", () => {
   test("repairs an incomplete snapshot instead of reporting it unchanged", async () => {
     const store = makeRecordingStore()
     const embeddings = makeRecordingEmbeddings(defaultProfile)
+
     const revision = await Effect.runPromise(
       projectArticle([
         { id: "summary", text: "A summary.", visibility: "public" },
@@ -374,11 +390,13 @@ describe("indexProjectedRevision", () => {
 
     await runIndex(revision, embeddings.service, store.service)
     store.retainOnlyFirstSnapshotChunk()
+
     const repaired = await runIndex(
       revision,
       embeddings.service,
       store.service,
     )
+
     const replay = await runIndex(
       revision,
       embeddings.service,
@@ -404,6 +422,7 @@ describe("indexProjectedRevision", () => {
   test("repairs duplicate snapshot identities instead of trusting their hash", async () => {
     const store = makeRecordingStore()
     const embeddings = makeRecordingEmbeddings(defaultProfile)
+
     const revision = await Effect.runPromise(
       projectArticle([
         { id: "summary", text: "A summary.", visibility: "public" },
@@ -413,6 +432,7 @@ describe("indexProjectedRevision", () => {
 
     await runIndex(revision, embeddings.service, store.service)
     store.duplicateFirstSnapshotChunk()
+
     const repaired = await runIndex(
       revision,
       embeddings.service,
@@ -430,11 +450,13 @@ describe("indexProjectedRevision", () => {
   test("updates metadata without requesting another embedding", async () => {
     const store = makeRecordingStore()
     const embeddings = makeRecordingEmbeddings(defaultProfile)
+
     const before = await Effect.runPromise(
       projectArticle([
         { id: "body", text: "Same text.", visibility: "private" },
       ]),
     )
+
     const after = await Effect.runPromise(
       projectArticle([
         { id: "body", text: "Same text.", visibility: "public" },
@@ -443,6 +465,7 @@ describe("indexProjectedRevision", () => {
 
     await runIndex(before, embeddings.service, store.service)
     const previousVector = store.current()?.chunks[0]?.vector
+
     const result = await runIndex(
       after,
       embeddings.service,
@@ -467,11 +490,13 @@ describe("indexProjectedRevision", () => {
   test("re-embeds changed content at the same logical chunk ID", async () => {
     const store = makeRecordingStore()
     const embeddings = makeRecordingEmbeddings(defaultProfile)
+
     const before = await Effect.runPromise(
       projectArticle([
         { id: "body", text: "Original text.", visibility: "public" },
       ]),
     )
+
     const after = await Effect.runPromise(
       projectArticle([
         { id: "body", text: "Replacement text.", visibility: "public" },
@@ -479,6 +504,7 @@ describe("indexProjectedRevision", () => {
     )
 
     await runIndex(before, embeddings.service, store.service)
+
     const result = await runIndex(
       after,
       embeddings.service,
@@ -500,12 +526,14 @@ describe("indexProjectedRevision", () => {
   test("deletes stale chunk IDs while reusing retained content", async () => {
     const store = makeRecordingStore()
     const embeddings = makeRecordingEmbeddings(defaultProfile)
+
     const before = await Effect.runPromise(
       projectArticle([
         { id: "keep", text: "Keep this.", visibility: "public" },
         { id: "remove", text: "Remove this.", visibility: "public" },
       ]),
     )
+
     const after = await Effect.runPromise(
       projectArticle([
         { id: "keep", text: "Keep this.", visibility: "public" },
@@ -513,6 +541,7 @@ describe("indexProjectedRevision", () => {
     )
 
     await runIndex(before, embeddings.service, store.service)
+
     const result = await runIndex(
       after,
       embeddings.service,
@@ -535,6 +564,7 @@ describe("indexProjectedRevision", () => {
   test("re-embeds unchanged content when the embedding profile changes", async () => {
     const store = makeRecordingStore()
     const firstEmbeddings = makeRecordingEmbeddings(defaultProfile)
+
     const nextEmbeddings = makeRecordingEmbeddings(
       defineEmbeddingProfile({
         id: "test:embedding",
@@ -542,6 +572,7 @@ describe("indexProjectedRevision", () => {
         dimensions: 2,
       }),
     )
+
     const revision = await Effect.runPromise(
       projectArticle([
         { id: "body", text: "Same text.", visibility: "public" },
@@ -549,6 +580,7 @@ describe("indexProjectedRevision", () => {
     )
 
     await runIndex(revision, firstEmbeddings.service, store.service)
+
     const result = await runIndex(
       revision,
       nextEmbeddings.service,
@@ -568,10 +600,12 @@ describe("indexProjectedRevision", () => {
 
   test("rejects vectors that do not match the declared dimensions", async () => {
     const store = makeRecordingStore()
+
     const embeddings = makeRecordingEmbeddings(
       defaultProfile,
       () => [1],
     )
+
     const revision = await Effect.runPromise(
       projectArticle([
         { id: "body", text: "Some text.", visibility: "public" },
@@ -580,12 +614,8 @@ describe("indexProjectedRevision", () => {
 
     const result = await Effect.runPromise(
       indexProjectedRevision(revision).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionIndexStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionIndexStore, store.service),
         Effect.result,
       ),
     )
@@ -604,11 +634,13 @@ describe("indexProjectedRevision", () => {
   test("returns an optimistic conflict instead of overwriting another writer", async () => {
     const store = makeRecordingStore()
     const embeddings = makeRecordingEmbeddings(defaultProfile)
+
     const revision = await Effect.runPromise(
       projectArticle([
         { id: "body", text: "Some text.", visibility: "public" },
       ]),
     )
+
     const conflictingStore: ProjectionIndexStoreService = {
       ...store.service,
       replaceRevision: (replacement) =>
@@ -622,12 +654,8 @@ describe("indexProjectedRevision", () => {
 
     const result = await Effect.runPromise(
       indexProjectedRevision(revision).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionIndexStore, conflictingStore),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionIndexStore, conflictingStore),
         Effect.result,
       ),
     )

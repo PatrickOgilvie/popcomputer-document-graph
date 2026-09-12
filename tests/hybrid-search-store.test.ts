@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import {
   defineEmbeddingProfile,
   EmbeddingProvider,
@@ -30,7 +30,9 @@ const embeddingProfile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 2,
 })
+
 const textPolicy = parseTextSearchPolicy({ language: "english" })
+
 if (textPolicy === "disabled") {
   throw new Error("The hybrid test requires enabled text search")
 }
@@ -46,25 +48,30 @@ const scope = makeGraphSearchScope(
     },
   ],
 )
+
 const reference = {
   graph: "hybrid-batch-test",
   kind: "Article",
   id: "article-1",
 } as const
+
 const documentKey = makeDocumentKey({
   graph: reference.graph,
   documentKind: reference.kind,
   encodedId: reference.id,
 })
+
 const chunkId = makeChunkId({
   documentKey,
   projection: "sections",
   sectionKey: "body",
   sectionPart: 0,
 })
+
 const revisionHash = Schema.decodeSync(ProjectionRevisionHashSchema)(
   "a".repeat(64),
 )
+
 const candidate = (score: number): SemanticSearchCandidate => ({
   score,
   chunkId,
@@ -80,53 +87,66 @@ const candidate = (score: number): SemanticSearchCandidate => ({
 
 const makeFallbackStores = () => {
   const calls = { semantic: 0, text: 0 }
+
   const semanticStore: ProjectionSearchStoreService = {
     searchCandidates: () => {
       calls.semantic += 1
+
       return Effect.succeed([])
     },
   }
+
   const textStore: ProjectionTextSearchStoreService = {
     searchTextCandidates: () => {
       calls.text += 1
+
       return Effect.succeed([])
     },
   }
+
   return { calls, semanticStore, textStore }
 }
 
 const makeEmbeddingProvider = () => {
   const queries: Array<string> = []
+
   const service: EmbeddingProviderService = {
     profile: embeddingProfile,
     embedDocuments: () => Effect.succeed([]),
     embedQuery: (query) => {
       queries.push(query)
+
       return Effect.succeed([0.25, 0.75])
     },
   }
+
   return { queries, service }
 }
 
 describe("optional batched hybrid candidate retrieval", () => {
   test("prefers one batched request and preserves both channel signals", async () => {
     const requests: Array<HybridCandidateRequest> = []
+
     const hybridStore: ProjectionHybridSearchStoreService = {
       searchHybridCandidates: (request) => {
         requests.push(request)
+
         return Effect.succeed({
           semantic: [candidate(0.91)],
           text: [candidate(7.5)],
         })
       },
     }
+
     const embeddings = makeEmbeddingProvider()
     const fallback = makeFallbackStores()
+
     const semanticStrategy = semantic({
       candidates: 11,
       results: 1,
       weight: 2,
     })
+
     const textStrategy = text({
       policy: textPolicy,
       candidates: 7,
@@ -148,18 +168,10 @@ describe("optional batched hybrid candidate retrieval", () => {
         results: semanticStrategy.results,
         rankConstant: semanticStrategy.rankConstant,
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, fallback.semanticStore),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionTextSearchStore, fallback.textStore),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionHybridSearchStore, hybridStore),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, fallback.semanticStore),
+        Effect.provideService(ProjectionTextSearchStore, fallback.textStore),
+        Effect.provideService(ProjectionHybridSearchStore, hybridStore),
       ),
     )
 
@@ -201,9 +213,11 @@ describe("optional batched hybrid candidate retrieval", () => {
           text: [candidate(0)],
         }),
     }
+
     const embeddings = makeEmbeddingProvider()
     const fallback = makeFallbackStores()
     const semanticStrategy = semantic({ candidates: 1, results: 1 })
+
     const textStrategy = text({
       policy: textPolicy,
       candidates: 1,
@@ -224,18 +238,10 @@ describe("optional batched hybrid candidate retrieval", () => {
         results: semanticStrategy.results,
         rankConstant: semanticStrategy.rankConstant,
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, fallback.semanticStore),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionTextSearchStore, fallback.textStore),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionHybridSearchStore, hybridStore),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, fallback.semanticStore),
+        Effect.provideService(ProjectionTextSearchStore, fallback.textStore),
+        Effect.provideService(ProjectionHybridSearchStore, hybridStore),
         Effect.result,
       ),
     )

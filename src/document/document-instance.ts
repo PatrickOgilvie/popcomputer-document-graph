@@ -69,9 +69,11 @@ export const parseDocumentInstance = <
           }),
       ),
     )
+
     const identified = yield* Effect.sync(() =>
       input.definition.identify(value),
     )
+
     const id = yield* Schema.decodeEffect(
       Schema.toType(input.definition.id),
     )(identified, { onExcessProperty: "error" }).pipe(
@@ -84,12 +86,14 @@ export const parseDocumentInstance = <
           }),
       ),
     )
+
     const encodedId = yield* encodeDocumentId(
       input.graph,
       input.documentKind,
       input.definition.id,
       id,
     )
+
     const documentKey = makeDocumentKey({
       graph: input.graph,
       documentKind: input.documentKind,

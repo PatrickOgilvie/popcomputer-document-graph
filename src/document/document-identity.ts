@@ -61,6 +61,7 @@ const primitiveJson = (
   value: null | boolean | number | string,
 ): string => {
   const encoded = JSON.stringify(value)
+
   if (encoded === undefined) {
     throw new Error("A JSON primitive unexpectedly failed to encode")
   }
@@ -88,8 +89,10 @@ const canonicalJson = (value: JsonValue): string => {
   // primitive and array branches were eliminated above.
   const record = value as Readonly<Record<string, JsonValue>>
   const entries: Array<string> = []
+
   for (const key of Object.keys(record).sort()) {
     const item = record[key]
+
     if (item === undefined) {
       throw new Error("A parsed JSON object unexpectedly contained undefined")
     }

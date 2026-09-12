@@ -115,6 +115,7 @@ export const namespaceFromTurbopufferIdentity = (input: {
   const prefix = input.prefix ?? "document-graph"
   const maximumPrefixLength = 128 - input.identity.length - 1
   const namespace = `${prefix.slice(0, maximumPrefixLength)}-${input.identity}`
+
   return parseTurbopufferNamespace(namespace)
 }
 
@@ -182,6 +183,7 @@ export const compileTurbopufferSchemaManifest = (
   dimensions: EmbeddingDimensions,
 ): TurbopufferSchemaManifest => {
   const providerDimensions = parseTurbopufferVectorDimensions(dimensions)
+
   return {
     format: "honertia.document-graph/turbopuffer-schema-v1",
     distanceMetric: "cosine_distance",

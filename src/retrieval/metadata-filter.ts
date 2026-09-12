@@ -81,13 +81,16 @@ export interface MetadataFilterBuilder<Metadata> {
 }
 
 const MaximumFilterLeaves = 100
+
 const MaximumFilterDepth = 8
+
 const MetadataSearchValueSchema = Schema.Union([
   Schema.Null,
   Schema.Boolean,
   Schema.Finite,
   Schema.String,
 ])
+
 const MetadataRecordSchema = Schema.Record(Schema.String, JsonValueSchema)
 
 interface InspectedMetadataFilter {
@@ -97,9 +100,11 @@ interface InspectedMetadataFilter {
 
 const parseKey = (key: string): string => {
   const parsed = key.trim()
+
   if (parsed.length === 0 || parsed.length > 200) {
     throw new Error("Metadata filter keys must contain 1 to 200 characters")
   }
+
   return parsed
 }
 
@@ -107,6 +112,7 @@ const parseValue = (value: MetadataSearchValue): MetadataSearchValue => {
   if (!Schema.is(MetadataSearchValueSchema)(value)) {
     throw new Error("Metadata filter numbers must be finite")
   }
+
   return value
 }
 
@@ -136,7 +142,9 @@ const inspectFilter = (
           "Metadata set-membership searches support at least one and at most 100 values",
         )
       }
+
       const [first, ...rest] = filter.values
+
       return {
         filter: {
           _tag: "OneOf",
@@ -146,33 +154,42 @@ const inspectFilter = (
         leaves: 1,
       }
     }
+
     case "Not": {
       const child = inspectFilter(filter.filter, depth + 1)
+
       return {
         filter: { _tag: "Not", filter: child.filter },
         leaves: child.leaves,
       }
     }
+
     case "All":
     case "Any": {
       if (filter.filters.length === 0) {
         throw new Error("Boolean metadata filters cannot be empty")
       }
+
       const [firstFilter, ...restFilters] = filter.filters
       const firstChild = inspectFilter(firstFilter, depth + 1)
+
       const restChildren = restFilters.map((child) =>
         inspectFilter(child, depth + 1),
       )
+
       const children = [firstChild, ...restChildren]
+
       const leaves = children.reduce(
         (total, child) => total + child.leaves,
         0,
       )
+
       if (leaves > MaximumFilterLeaves) {
         throw new Error(
           `Metadata filters support at most ${MaximumFilterLeaves} leaves`,
         )
       }
+
       return {
         filter: {
           _tag: filter._tag,
@@ -197,15 +214,18 @@ export const normalizeMetadataFilters = (
   filters: ReadonlyArray<MetadataFilter>,
 ): ReadonlyArray<MetadataFilter> => {
   const inspected = filters.map((filter) => inspectFilter(filter, 1))
+
   const leaves = inspected.reduce(
     (total, filter) => total + filter.leaves,
     0,
   )
+
   if (leaves > MaximumFilterLeaves) {
     throw new Error(
       `Metadata filters support at most ${MaximumFilterLeaves} leaves`,
     )
   }
+
   return inspected.map((filter) => filter.filter)
 }
 
@@ -232,7 +252,9 @@ export const metadataOneOf = (
       "Metadata set-membership searches support at most 100 values",
     )
   }
+
   const [first, ...rest] = values
+
   return {
     _tag: "OneOf",
     key: parseKey(key),
@@ -290,10 +312,13 @@ export const evaluateMetadataFilter = (
       if (metadata === undefined || !Schema.is(MetadataRecordSchema)(metadata)) {
         return false
       }
+
       const value = metadata[filter.key]
+
       if (value === undefined || !Schema.is(MetadataSearchValueSchema)(value)) {
         return false
       }
+
       return filter._tag === "Equals"
         ? value === filter.value
         : filter.values.some((candidate) => candidate === value)

@@ -14,7 +14,9 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 3,
 })
+
 const deploymentId = "test-account/main"
+
 const endpoint = {
   _tag: "Region",
   region: "gcp-us-central1",
@@ -29,6 +31,7 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const repeated = makeTurbopufferWorkspacePartition({
       workspace: "workspace-1",
       deploymentId,
@@ -36,6 +39,7 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const otherWorkspace = makeTurbopufferWorkspacePartition({
       workspace: "workspace-2",
       deploymentId,
@@ -64,6 +68,7 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const other = makeTurbopufferWorkspacePartition({
       workspace: "workspace-2",
       deploymentId,
@@ -96,6 +101,7 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const otherDeployment = makeTurbopufferWorkspacePartition({
       workspace: "workspace-1",
       deploymentId: "test-account/other",
@@ -103,6 +109,7 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const otherRegion = makeTurbopufferWorkspacePartition({
       workspace: "workspace-1",
       deploymentId,
@@ -110,6 +117,7 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const custom = makeTurbopufferWorkspacePartition({
       workspace: "workspace-1",
       deploymentId,
@@ -125,9 +133,11 @@ describe("Turbopuffer workspace partition", () => {
     expect(otherRegion.identity).not.toBe(regional.identity)
     expect(custom.identity).not.toBe(regional.identity)
     expect(custom.endpoint._tag).toBe("Custom")
+
     if (custom.endpoint._tag !== "Custom") {
       throw new Error("Expected a custom endpoint")
     }
+
     expect(String(custom.endpoint.baseURL)).toBe(
       "https://tp.example.com/api",
     )
@@ -178,6 +188,7 @@ describe("Turbopuffer workspace partition", () => {
       version: "maximum",
       dimensions: 10_752,
     })
+
     const maximumPartition = makeTurbopufferWorkspacePartition({
       workspace: "workspace-1",
       deploymentId,
@@ -185,6 +196,7 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: maximumProfile,
       schemaGeneration: 1,
     })
+
     expect(Number(maximumPartition.embeddingProfile.dimensions)).toBe(10_752)
     expect(
       compileTurbopufferSchemaManifest(maximumProfile.dimensions)
@@ -199,6 +211,7 @@ describe("Turbopuffer workspace partition", () => {
       version: "too-wide",
       dimensions: 10_753,
     })
+
     expect(() => makeTurbopufferWorkspacePartition({
       workspace: "workspace-1",
       deploymentId,
@@ -225,11 +238,13 @@ describe("Turbopuffer workspace partition", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const client = makeOfficialTurbopufferClient({
       apiKey: Redacted.make("test-api-key"),
       partition,
       retries: 0,
     })
+
     const rotatedClient = makeOfficialTurbopufferClient({
       apiKey: Redacted.make("rotated-test-api-key"),
       partition,

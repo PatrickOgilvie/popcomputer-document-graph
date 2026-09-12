@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
@@ -41,12 +41,15 @@ import {
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("RetrievalArticleId"),
 )
+
 const NoteId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("RetrievalNoteId"),
 )
+
 const SearchMetadata = Schema.Struct({
   visibility: Schema.Literals(["public", "private"]),
 })
+
 const ArticleValue = Schema.Struct({
   id: ArticleId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -58,6 +61,7 @@ const ArticleValue = Schema.Struct({
     }),
   ),
 })
+
 const NoteValue = Schema.Struct({
   id: NoteId,
   text: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -73,6 +77,7 @@ const ArticleDocument = defineDocument({
   metadata: SearchMetadata,
   select: (article) => {
     const [first, ...rest] = article.sections
+
     return {
       context: article.title,
       sections: [
@@ -112,9 +117,11 @@ const retrievalGraph = defineDocumentGraph({
     PrivateNote: PrivateNoteDocument,
   },
 })
+
 const ArticleSections = retrievalGraph
   .document("Article")
   .projection("sections")
+
 const retrievalScope = (
   input: GraphSearchScopeInput<
     "Article" | "PrivateNote",
@@ -129,6 +136,7 @@ const retrievalScope = (
 const articleId = Schema.decodeSync(ArticleId)(
   "55555555-5555-4555-8555-555555555555",
 )
+
 const embeddingProfile = defineEmbeddingProfile({
   id: "test:retrieval",
   version: "v1",
@@ -162,6 +170,7 @@ const makeCandidate = (
   score: number,
 ): SemanticSearchCandidate => {
   const chunk = revision.chunks[index]
+
   if (chunk === undefined) {
     throw new Error(`Missing retrieval fixture chunk ${index}`)
   }
@@ -216,6 +225,7 @@ const makeEmbeddingService = (
   queryVector: ReadonlyArray<number> = [0.25, 0.75],
 ) => {
   const queries: Array<string> = []
+
   const service: EmbeddingProviderService = {
     profile: embeddingProfile,
     embedDocuments: (requests) =>
@@ -227,6 +237,7 @@ const makeEmbeddingService = (
       ),
     embedQuery: (query) => {
       queries.push(query)
+
       return Effect.succeed(queryVector)
     },
   }
@@ -240,9 +251,11 @@ const makeSearchStore = (
   const requests: Array<
     Parameters<ProjectionSearchStoreService["searchCandidates"]>[0]
   > = []
+
   const service: ProjectionSearchStoreService = {
     searchCandidates: (request) => {
       requests.push(request)
+
       return Effect.succeed(candidates)
     },
   }
@@ -263,14 +276,15 @@ const runSearch = (
 ) =>
   Effect.runPromise(
     searchGraph(input).pipe(
-      Effect.provide(Layer.succeed(EmbeddingProvider, embeddings)),
-      Effect.provide(Layer.succeed(ProjectionSearchStore, store)),
+      Effect.provideService(EmbeddingProvider, embeddings),
+      Effect.provideService(ProjectionSearchStore, store),
     ),
   )
 
 describe("graph retrieval", () => {
   test("bounds metadata set-membership scopes at configuration time", () => {
     const values: [number, ...Array<number>] = [0]
+
     for (let value = 1; value <= 100; value += 1) {
       values.push(value)
     }
@@ -283,15 +297,18 @@ describe("graph retrieval", () => {
   test("returns limited focal hits from a graph-scoped semantic search", async () => {
     const revision = await Effect.runPromise(projectArticle())
     const embeddings = makeEmbeddingService()
+
     const store = makeSearchStore([
       makeCandidate(revision, 0, 0.9),
       makeCandidate(revision, 1, 0.8),
     ])
+
     const scope = retrievalScope({
       exclude: ["PrivateNote"],
       includeProjections: ["sections"],
       where: [metadataEquals("visibility", "public")],
     })
+
     const strategy = semantic({ candidates: 20, results: 1 })
 
     const hits = await runSearch(
@@ -347,16 +364,21 @@ describe("graph retrieval", () => {
     const embeddings = makeEmbeddingService()
     const semanticStore = makeSearchStore([])
     const textRequests: Array<unknown> = []
+
     const textStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) => {
         textRequests.push(request)
+
         return Effect.succeed([])
       },
     }
+
     const textPolicy = parseTextSearchPolicy(undefined)
+
     if (textPolicy === "disabled") {
       throw new Error("The default text policy unexpectedly disabled search")
     }
+
     const semanticStrategy = semantic()
 
     const hits = await Effect.runPromise(
@@ -373,15 +395,9 @@ describe("graph retrieval", () => {
         results: semanticStrategy.results,
         rankConstant: semanticStrategy.rankConstant,
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, semanticStore.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionTextSearchStore, textStore),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, semanticStore.service),
+        Effect.provideService(ProjectionTextSearchStore, textStore),
       ),
     )
 
@@ -395,6 +411,7 @@ describe("graph retrieval", () => {
     const revision = await Effect.runPromise(projectArticle())
     const embeddings = makeEmbeddingService()
     const store = makeSearchStore([makeCandidate(revision, 0, 0.9)])
+
     const anotherDocumentKey = makeDocumentKey({
       graph: "retrieval-test",
       documentKind: "Article",
@@ -409,12 +426,8 @@ describe("graph retrieval", () => {
         }),
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -448,11 +461,13 @@ describe("graph retrieval", () => {
       documentKind: "Article",
       encodedId: "first-target",
     })
+
     const second = makeDocumentKey({
       graph: "retrieval-test",
       documentKind: "Article",
       encodedId: "second-target",
     })
+
     const normalized = documentKeys([second, first, second])
 
     expect([...normalized.documentKeys]).toEqual([first, second].sort())
@@ -475,6 +490,7 @@ describe("graph retrieval", () => {
     const revision = await Effect.runPromise(projectArticle())
     const embeddings = makeEmbeddingService()
     const store = makeSearchStore([makeCandidate(revision, 0, 0.9)])
+
     const scope = makeGraphSearchScope("retrieval-test", {}, [
       {
         documentKind: "Article",
@@ -489,12 +505,8 @@ describe("graph retrieval", () => {
         scope,
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -513,6 +525,7 @@ describe("graph retrieval", () => {
     const revision = await Effect.runPromise(projectArticle())
     const embeddings = makeEmbeddingService()
     const candidate = makeCandidate(revision, 0, 0.9)
+
     const store = makeSearchStore([
       {
         ...candidate,
@@ -529,12 +542,8 @@ describe("graph retrieval", () => {
         scope: retrievalScope({ exclude: ["PrivateNote"] }),
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -553,6 +562,7 @@ describe("graph retrieval", () => {
     const revision = await Effect.runPromise(projectArticle())
     const embeddings = makeEmbeddingService()
     const candidate = makeCandidate(revision, 0, 0.9)
+
     const store = makeSearchStore([
       { ...candidate, sectionPart: candidate.sectionPart + 1 },
     ])
@@ -563,12 +573,8 @@ describe("graph retrieval", () => {
         scope: retrievalScope(),
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -588,14 +594,18 @@ describe("graph retrieval", () => {
     const embeddings = makeEmbeddingService()
     const candidate = makeCandidate(revision, 0, 0.9)
     const semanticStore = makeSearchStore([candidate])
+
     const textStore = makeTextSearchStore([
       { ...candidate, score: 3, content: "Conflicting stored content." },
     ])
+
     const semanticStrategy = semantic({ candidates: 5, results: 5 })
     const textPolicy = parseTextSearchPolicy(undefined)
+
     if (textPolicy === "disabled") {
       throw new Error("The default text policy unexpectedly disabled search")
     }
+
     const textStrategy = text({
       policy: textPolicy,
       candidates: 5,
@@ -616,15 +626,9 @@ describe("graph retrieval", () => {
         results: semantic({ candidates: 1, results: 1 }).results,
         rankConstant: semanticStrategy.rankConstant,
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, semanticStore.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionTextSearchStore, textStore),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, semanticStore.service),
+        Effect.provideService(ProjectionTextSearchStore, textStore),
         Effect.result,
       ),
     )
@@ -643,6 +647,7 @@ describe("graph retrieval", () => {
     const revision = await Effect.runPromise(projectArticle())
     const embeddings = makeEmbeddingService()
     const candidate = makeCandidate(revision, 0, 0.9)
+
     const store = makeSearchStore([
       {
         ...candidate,
@@ -658,12 +663,8 @@ describe("graph retrieval", () => {
         }),
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -688,12 +689,8 @@ describe("graph retrieval", () => {
         scope: retrievalScope(),
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -719,18 +716,15 @@ describe("graph retrieval", () => {
       embeddings.service,
       store.service,
     )
+
     const tooLong = await Effect.runPromise(
       searchGraph({
         query: `${maximumQuery}q`,
         scope: retrievalScope(),
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -753,12 +747,8 @@ describe("graph retrieval", () => {
         scope: retrievalScope(),
         strategy: semantic(),
       }).pipe(
-        Effect.provide(
-          Layer.succeed(EmbeddingProvider, embeddings.service),
-        ),
-        Effect.provide(
-          Layer.succeed(ProjectionSearchStore, store.service),
-        ),
+        Effect.provideService(EmbeddingProvider, embeddings.service),
+        Effect.provideService(ProjectionSearchStore, store.service),
         Effect.result,
       ),
     )
@@ -778,12 +768,15 @@ describe("graph retrieval", () => {
     const revision = await Effect.runPromise(projectArticle())
     const candidate = makeCandidate(revision, 0, 0.9)
     const hit = makeSemanticHit(candidate)
+
     const requests: Array<
       Parameters<GroundingHydratorService["hydrate"]>[0]
     > = []
+
     const hydrator: GroundingHydratorService = {
       hydrate: (request) => {
         requests.push(request)
+
         return Effect.succeed({
           content:
             "National distribution was difficult. Supporting detail.",
@@ -794,7 +787,7 @@ describe("graph retrieval", () => {
 
     const material = await Effect.runPromise(
       hydrateGrounding(hit).pipe(
-        Effect.provide(Layer.succeed(GroundingHydrator, hydrator)),
+        Effect.provideService(GroundingHydrator, hydrator),
       ),
     )
 
@@ -807,6 +800,7 @@ describe("graph retrieval", () => {
   test("owns attribution for document-level grounding", async () => {
     const revision = await Effect.runPromise(projectArticle())
     const hit = makeSemanticHit(makeCandidate(revision, 0, 0.9))
+
     const hydrator: GroundingHydratorService = {
       hydrate: () =>
         Effect.succeed({
@@ -817,7 +811,7 @@ describe("graph retrieval", () => {
 
     const material = await Effect.runPromise(
       hydrateGrounding(hit, { level: "document" }).pipe(
-        Effect.provide(Layer.succeed(GroundingHydrator, hydrator)),
+        Effect.provideService(GroundingHydrator, hydrator),
       ),
     )
 
@@ -828,6 +822,7 @@ describe("graph retrieval", () => {
   test("rejects empty grounding payloads", async () => {
     const revision = await Effect.runPromise(projectArticle())
     const hit = makeSemanticHit(makeCandidate(revision, 0, 0.9))
+
     const hydrator: GroundingHydratorService = {
       hydrate: () =>
         Effect.succeed({ content: "   ", metadata: undefined }),
@@ -835,12 +830,13 @@ describe("graph retrieval", () => {
 
     const result = await Effect.runPromise(
       hydrateGrounding(hit).pipe(
-        Effect.provide(Layer.succeed(GroundingHydrator, hydrator)),
+        Effect.provideService(GroundingHydrator, hydrator),
         Effect.result,
       ),
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("DocumentGraphUnavailable")
       expect(result.failure.operation).toBe("hydrate")

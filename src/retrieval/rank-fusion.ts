@@ -109,6 +109,7 @@ export const weightedReciprocalRankFusion = <
 
   for (const stream of input.streams) {
     const seen = new Set<Key>()
+
     for (const [index, item] of stream.items.entries()) {
       if (seen.has(item.key)) {
         return Effect.fail(
@@ -118,6 +119,7 @@ export const weightedReciprocalRankFusion = <
           }),
         )
       }
+
       seen.add(item.key)
 
       if (!Number.isFinite(item.score)) {
@@ -131,6 +133,7 @@ export const weightedReciprocalRankFusion = <
 
       const rank = index + 1
       const contribution = stream.weight / (input.rankConstant + rank)
+
       const signal = {
         id: stream.id,
         stream: stream.signal,
@@ -139,7 +142,9 @@ export const weightedReciprocalRankFusion = <
         weight: stream.weight,
         contribution,
       }
+
       const current = fused.get(item.key)
+
       if (current === undefined) {
         fused.set(item.key, {
           key: item.key,
@@ -153,6 +158,7 @@ export const weightedReciprocalRankFusion = <
 
       current.score += contribution
       current.signals.push(signal)
+
       if (stream.id < current.selectedStreamId) {
         current.value = item.value
         current.selectedStreamId = stream.id
@@ -170,7 +176,9 @@ export const weightedReciprocalRankFusion = <
         const orderedSignals = result.signals
           .sort((left, right) => left.id.localeCompare(right.id))
           .map(({ id: _id, ...signal }) => signal)
+
         const [first, ...rest] = orderedSignals
+
         if (first === undefined) {
           throw new Error("A fused result unexpectedly has no signals")
         }

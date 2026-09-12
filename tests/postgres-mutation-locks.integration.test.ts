@@ -21,6 +21,7 @@ import {
 const databaseUrl =
   Bun.env.TEST_DATABASE_URL ??
   Bun.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
+
 const runIntegrationTests =
   Bun.env.RUN_DOCUMENT_GRAPH_POSTGRES_TESTS === "true" &&
   databaseUrl !== undefined
@@ -28,6 +29,7 @@ const runIntegrationTests =
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("LocksArticleId"),
 )
+
 const Article = Schema.Struct({
   id: ArticleId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -40,6 +42,7 @@ const Article = Schema.Struct({
     }),
   ),
 })
+
 const ArticleDocument = defineDocument({
   id: ArticleId,
   value: Article,
@@ -49,6 +52,7 @@ const ArticleDocument = defineDocument({
   version: "v1",
   select: (article) => {
     const [first, ...rest] = article.sections
+
     return {
       context: article.title,
       sections: [
@@ -67,12 +71,16 @@ const ArticleDocument = defineDocument({
   },
   chunking: sectionChunking({ maximumCharacters: 256 }),
 })
+
 const graph = defineDocumentGraph({
   id: "postgres-mutation-locks",
   documents: { Article: ArticleDocument },
 })
+
 const ArticleNode = graph.document("Article")
+
 const ArticleContent = ArticleNode.projection("article-content")
+
 const profile = defineEmbeddingProfile({
   id: "test:mutation-locks",
   version: "v1",
@@ -114,23 +122,29 @@ interface RecordedQuery {
  */
 const makeRecordingClient = () => {
   const queries: Array<RecordedQuery> = []
+
   const client = postgresTransactionClient({
     query: (text, values = []) => {
       queries.push({ text, values })
+
       if (text.includes("RETURNING revision_token")) {
         return Promise.resolve({ rows: [{ revision_token: "7" }] })
       }
+
       if (text.includes("AS revision_count")) {
         return Promise.resolve({
           rows: [{ revision_count: "0", chunk_count: "0" }],
         })
       }
+
       if (text.includes("AS deleted_count")) {
         return Promise.resolve({ rows: [{ deleted_count: "0" }] })
       }
+
       return Promise.resolve({ rows: [] })
     },
   })
+
   return { client, queries }
 }
 
@@ -140,6 +154,7 @@ const replacementOf = (
   >,
 ): ReplaceProjectedRevision => {
   const [firstChunk, ...restChunks] = revision.chunks
+
   const chunkRecord = (chunk: typeof firstChunk) => ({
     chunkId: chunk.chunkId,
     contentHash: chunk.contentHash,
@@ -152,6 +167,7 @@ const replacementOf = (
     text: chunk.text,
     metadata: chunk.metadata,
   })
+
   return {
     key: {
       documentKey: revision.documentKey,
@@ -195,19 +211,24 @@ describe("postgresDocumentGraph mutation locking", () => {
   test("emits exact-key row locks instead of advisory functions", async () => {
     const sourceId = "11111111-1111-4111-8111-111111111111"
     const relatedId = "22222222-2222-4222-8222-222222222222"
+
     const revision = await runProjection(
       article(sourceId, "Locked body text.", [relatedId]),
     )
+
     const replacement = replacementOf(revision)
+
     const relatedRevision = await runProjection(
       article(relatedId, "Related body text."),
     )
 
     const { client, queries } = makeRecordingClient()
+
     const live = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings),
       postgresDocumentGraph({ transaction: client }),
     )
+
     const relationReplacement = {
       graph: graph.id,
       sourceDocumentKey: revision.documentKey,
@@ -245,6 +266,7 @@ describe("postgresDocumentGraph mutation locking", () => {
 
     const projectionLocks = findLockQueries(queries, "projection")
     expect(projectionLocks).toHaveLength(4)
+
     for (const lock of projectionLocks) {
       expect(lock.values).toEqual([
         "projection",
@@ -252,6 +274,7 @@ describe("postgresDocumentGraph mutation locking", () => {
         revision.projection.id,
       ])
     }
+
     expect(
       projectionLocks.filter((lock) => lock.text.startsWith("INSERT")),
     ).toHaveLength(2)
@@ -263,16 +286,19 @@ describe("postgresDocumentGraph mutation locking", () => {
       (query) =>
         query.text.startsWith("INSERT") && query.text.includes("mutation_locks"),
     )
+
     const revisionRead = queries.findIndex(
       (query) =>
         query.text.includes("projected_revisions") &&
         query.text.includes("FOR UPDATE"),
     )
+
     expect(firstLockInsert).toBeGreaterThanOrEqual(0)
     expect(revisionRead).toBeGreaterThan(firstLockInsert)
 
     const relationsLocks = findLockQueries(queries, "relations")
     expect(relationsLocks).toHaveLength(2)
+
     for (const lock of relationsLocks) {
       expect(lock.values).toEqual([
         "relations",
@@ -297,6 +323,7 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
       "runs projection and relations replacements concurrently for one document",
       () => undefined,
     )
+
     return
   }
 
@@ -313,6 +340,7 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
         new URL(`../migrations/postgres/${file}`, import.meta.url),
         "utf8",
       )
+
       await pool.query(
         migration.replaceAll('"honertia_document_graph"', `"${schema}"`),
       )
@@ -330,16 +358,20 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
     async () => {
       const schema = `document_graph_${crypto.randomUUID().replaceAll("-", "")}`
       const pool = new Pool({ connectionString: databaseUrl, max: 4 })
+
       try {
         await migrateInSchema(pool, schema)
         const live = liveFor(pool, schema)
         const documentId = "33333333-3333-4333-8333-333333333333"
+
         const firstRevision = await runProjection(
           article(documentId, "First writer body."),
         )
+
         const secondRevision = await runProjection(
           article(documentId, "Second writer body."),
         )
+
         const firstReplacement = replacementOf(firstRevision)
         const secondReplacement = replacementOf(secondRevision)
 
@@ -347,12 +379,14 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
           Effect.runPromise(
             Effect.gen(function*() {
               const store = yield* ProjectionIndexStore
+
               return yield* Effect.result(store.replaceRevision(firstReplacement))
             }).pipe(Effect.provide(live)),
           ),
           Effect.runPromise(
             Effect.gen(function*() {
               const store = yield* ProjectionIndexStore
+
               return yield* Effect.result(store.replaceRevision(secondReplacement))
             }).pipe(Effect.provide(live)),
           ),
@@ -361,22 +395,28 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
         const firstIsSuccess = Result.isSuccess(firstOutcome)
         expect(firstIsSuccess).not.toBe(Result.isSuccess(secondOutcome))
         const failure = firstIsSuccess ? secondOutcome : firstOutcome
+
         if (Result.isFailure(failure)) {
           expect(failure.failure._tag).toBe("ProjectionIndexConflict")
         }
 
         const winner = firstIsSuccess ? firstReplacement : secondReplacement
+
         const finalState = await Effect.runPromise(
           Effect.gen(function*() {
             const store = yield* ProjectionIndexStore
+
             const [lookup] = yield* store.loadRevisions([{
               documentKey: winner.key.documentKey,
               projection: winner.key.projection,
             }])
+
             return lookup?.revision ?? Option.none()
           }).pipe(Effect.provide(live)),
         )
+
         expect(Option.isSome(finalState)).toBe(true)
+
         if (Option.isSome(finalState)) {
           expect(finalState.value.revisionHash).toBe(winner.revisionHash)
           expect(finalState.value.chunks.map((chunk) => chunk.contentHash))
@@ -398,6 +438,7 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
     async () => {
       const schema = `document_graph_${crypto.randomUUID().replaceAll("-", "")}`
       const pool = new Pool({ connectionString: databaseUrl, max: 4 })
+
       try {
         await migrateInSchema(pool, schema)
         const firstId = "44444444-4444-4444-8444-444444444444"
@@ -436,14 +477,17 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
     async () => {
       const schema = `document_graph_${crypto.randomUUID().replaceAll("-", "")}`
       const pool = new Pool({ connectionString: databaseUrl, max: 4 })
+
       try {
         await migrateInSchema(pool, schema)
         const live = liveFor(pool, schema)
         const sourceId = "66666666-6666-4666-8666-666666666666"
         const relatedId = "77777777-7777-4777-8777-777777777777"
+
         const revision = await runProjection(
           article(sourceId, "Shared document body.", [relatedId]),
         )
+
         const relatedRevision = await runProjection(
           article(relatedId, "Related document body."),
         )
@@ -452,6 +496,7 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
           Effect.runPromise(
             Effect.gen(function*() {
               const store = yield* ProjectionIndexStore
+
               return yield* Effect.result(store.replaceRevision(
                 replacementOf(revision),
               ))
@@ -460,6 +505,7 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
           Effect.runPromise(
             Effect.gen(function*() {
               const relations = yield* GraphTopologyStore
+
               return yield* Effect.result(relations.replaceDocumentTopology({
                 graph: graph.id,
                 sourceDocumentKey: revision.documentKey,
@@ -488,6 +534,7 @@ describe("postgresDocumentGraph concurrent mutation locking", () => {
 
         expect(Result.isSuccess(projectionOutcome)).toBe(true)
         expect(Result.isSuccess(relationsOutcome)).toBe(true)
+
         if (Result.isSuccess(relationsOutcome)) {
           expect(relationsOutcome.success).toEqual({
             inserted: 1,

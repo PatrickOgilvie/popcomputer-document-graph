@@ -22,6 +22,7 @@ function isConstAssertion(node: TypeAssertion): boolean {
 
 function hasSafetyComment(sourceCode: SourceCode, node: TypeAssertion): boolean {
   let current: ESTree.Node = node;
+
   while (true) {
     if (
       sourceCode
@@ -30,6 +31,7 @@ function hasSafetyComment(sourceCode: SourceCode, node: TypeAssertion): boolean 
     ) {
       return true;
     }
+
     if (commentOwnerKinds.has(current.type) || current.parent.type === "Program") return false;
     current = current.parent;
   }

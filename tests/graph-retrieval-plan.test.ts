@@ -10,7 +10,7 @@ import {
 } from "../src/index.js"
 import {
   GraphTopologyStore,
-  ProjectionSearchStore,
+  type ProjectionSearchStore,
   ProjectionTextSearchStore,
   type GraphTopologyStoreService,
   type ProjectionTextSearchStoreService,
@@ -21,14 +21,17 @@ import { makeChunkId } from "../src/document/document-identity.js"
 const AgencyId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("RetrievalPlanAgencyId"),
 )
+
 const WorkId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("RetrievalPlanWorkId"),
 )
+
 const Agency = Schema.Struct({
   id: AgencyId,
   name: Schema.Trimmed.check(Schema.isNonEmpty()),
   profile: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
+
 const Work = Schema.Struct({
   id: WorkId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -44,6 +47,7 @@ const AgencyDocument = defineDocument(Agency, { id: "id" }).vectorise({
     sections: [{ key: "profile", content: agency.profile }],
   }),
 })
+
 const WorkDocument = defineDocument(Work, { id: "id" }).vectorise({
   id: "evidence",
   version: "v1",
@@ -52,6 +56,7 @@ const WorkDocument = defineDocument(Work, { id: "id" }).vectorise({
     sections: [{ key: "evidence", content: work.evidence }],
   }),
 })
+
 const graph = defineDocumentGraph({
   id: "retrieval-plan-test",
   documents: { Agency: AgencyDocument, Work: WorkDocument },
@@ -66,9 +71,13 @@ const graph = defineDocumentGraph({
 })
 
 const AgencyNode = graph.document("Agency")
+
 const WorkNode = graph.document("Work")
+
 const AgencyProfile = AgencyNode.projection("profile")
+
 const WorkEvidence = WorkNode.projection("evidence")
+
 const FindAgencies = graph.retrieval({
   target: "Agency",
   routes: [AgencyProfile, WorkEvidence.through("deliveredBy")],
@@ -76,6 +85,7 @@ const FindAgencies = graph.retrieval({
   candidates: { text: 20 },
   maximumEvidencePerTarget: 2,
 })
+
 const FindAgenciesReordered = graph.retrieval({
   target: "Agency",
   routes: [WorkEvidence.through("deliveredBy"), AgencyProfile],
@@ -83,21 +93,25 @@ const FindAgenciesReordered = graph.retrieval({
   candidates: { text: 20 },
   maximumEvidencePerTarget: 2,
 })
+
 const FindAgenciesDirectly = graph.retrieval({
   target: "Agency",
   routes: [AgencyProfile],
   strategy: "text",
 })
+
 const FindAgenciesSemantically = graph.retrieval({
   target: "Agency",
   routes: [AgencyProfile],
   strategy: "semantic",
 })
+
 const FindAgenciesFromWork = graph.retrieval({
   target: "Agency",
   routes: [WorkEvidence.through("deliveredBy")],
   strategy: "text",
 })
+
 const FindAgenciesWithHybridRoutes = graph.retrieval({
   target: "Agency",
   routes: [AgencyProfile, WorkEvidence.through("deliveredBy")],
@@ -106,15 +120,19 @@ const FindAgenciesWithHybridRoutes = graph.retrieval({
 const agencyId = Schema.decodeSync(AgencyId)(
   "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 )
+
 const unrelatedAgencyId = Schema.decodeSync(AgencyId)(
   "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 )
+
 const firstWorkId = Schema.decodeSync(WorkId)(
   "11111111-1111-4111-8111-111111111111",
 )
+
 const secondWorkId = Schema.decodeSync(WorkId)(
   "22222222-2222-4222-8222-222222222222",
 )
+
 const orphanWorkId = Schema.decodeSync(WorkId)(
   "33333333-3333-4333-8333-333333333333",
 )
@@ -124,6 +142,7 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 2,
 })
+
 const embeddings: EmbeddingProviderService = {
   profile,
   embedDocuments: (requests) =>
@@ -189,8 +208,10 @@ describe("graph retrieval plans", () => {
 
     for (const result of results) {
       expect(Result.isFailure(result)).toBe(true)
+
       if (Result.isFailure(result)) {
         expect(result.failure._tag).toBe("InvalidSearchQuery")
+
         if (result.failure._tag === "InvalidSearchQuery") {
           expect(result.failure.reason).toBe("invalid_options")
         }
@@ -207,11 +228,14 @@ describe("graph retrieval plans", () => {
       evidence: `National evidence ${index + 1}`,
       agencyIds: [agencyId],
     }))
+
     const revisions = await Effect.runPromise(
       Effect.forEach(work, (value) => WorkEvidence.project(value)),
     )
+
     const candidates = revisions.map((revision, index) => {
       const chunk = revision.chunks[0]
+
       return {
         score: revisions.length - index,
         chunkId: chunk.chunkId,
@@ -225,14 +249,17 @@ describe("graph retrieval plans", () => {
         metadata: chunk.metadata,
       }
     })
+
     const agencyKey = await Effect.runPromise(AgencyNode.key(agencyId))
     const batchSizes: Array<number> = []
     let active = 0
     let maximumActive = 0
+
     const textStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) =>
         Effect.succeed(candidates.slice(0, request.candidates)),
     }
+
     const topologyStore: GraphTopologyStoreService = {
       replaceDocumentTopology: () =>
         Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
@@ -257,7 +284,8 @@ describe("graph retrieval plans", () => {
             maximumActive = Math.max(maximumActive, active)
           }),
           () =>
-            Effect.sleep("5 millis").pipe(
+            // Keep the read active across a yield so concurrent batches overlap.
+            Effect.yieldNow.pipe(
               Effect.as(request.documentKeys.map((documentKey) => ({
                 documentKey,
                 nodes: [{ documentKey: agencyKey, reference: AgencyNode.ref(agencyId), state: "Materialized" as const }],
@@ -298,7 +326,9 @@ describe("graph retrieval plans", () => {
         agencyIds: [agencyId],
       }),
     )
+
     const chunk = revision.chunks[0]
+
     const candidates = Array.from({ length: 12 }, (_, index) => ({
       score: 12 - index,
       chunkId: makeChunkId({
@@ -316,12 +346,15 @@ describe("graph retrieval plans", () => {
       content: `${chunk.content} ${index}`,
       metadata: chunk.metadata,
     }))
+
     const agencyKey = await Effect.runPromise(AgencyNode.key(agencyId))
     let traversals = 0
+
     const textStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) =>
         Effect.succeed(candidates.slice(0, request.candidates)),
     }
+
     const topologyStore: GraphTopologyStoreService = {
       replaceDocumentTopology: () =>
         Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
@@ -340,6 +373,7 @@ describe("graph retrieval plans", () => {
         Effect.succeed({ nodes: [], next: Option.none() }),
       findRelatedNodes: (request) => {
         traversals += 1
+
         return Effect.succeed(request.documentKeys.map((documentKey) => ({
           documentKey,
           nodes: [{ documentKey: agencyKey, reference: AgencyNode.ref(agencyId), state: "Materialized" as const }],
@@ -370,9 +404,11 @@ describe("graph retrieval plans", () => {
       Effect.gen(function*() {
         yield* seed
         const combined = yield* FindAgencies.search("national", { limit: 6 })
+
         const direct = yield* FindAgenciesDirectly.search("national", {
           limit: 6,
         })
+
         return { combined, direct }
       }).pipe(Effect.provide(live)),
     )
@@ -399,6 +435,7 @@ describe("graph retrieval plans", () => {
         yield* seed
         const national = yield* FindAgencies.search("national")
         const orphan = yield* FindAgencies.search("orphanphrase")
+
         return { national, orphan }
       }).pipe(Effect.provide(live)),
     )
@@ -417,6 +454,7 @@ describe("graph retrieval plans", () => {
         yield* seed
         const declared = yield* FindAgencies.search("national")
         const reordered = yield* FindAgenciesReordered.search("national")
+
         return { declared, reordered }
       }).pipe(Effect.provide(live)),
     )
@@ -426,13 +464,16 @@ describe("graph retrieval plans", () => {
 
   test("embeds one query once across every semantic retrieval route", async () => {
     const queries: Array<string> = []
+
     const recordingEmbeddings: EmbeddingProviderService = {
       ...embeddings,
       embedQuery: (query) => {
         queries.push(query)
+
         return Effect.succeed([1, 1])
       },
     }
+
     const recordingLive = Layer.mergeAll(
       inMemoryDocumentGraph(),
       Layer.succeed(EmbeddingProvider, recordingEmbeddings),
@@ -455,6 +496,7 @@ if (import.meta.url === "") {
     SearchDocumentGraphError,
     ProjectionTextSearchStore | GraphTopologyStore
   > = FindAgencies.search("query")
+
   void relatedTextAction
 
   const directTextAction: Effect.Effect<
@@ -462,6 +504,7 @@ if (import.meta.url === "") {
     SearchDocumentGraphError,
     ProjectionTextSearchStore
   > = FindAgenciesDirectly.search("query")
+
   void directTextAction
 
   const directSemanticAction: Effect.Effect<
@@ -469,6 +512,7 @@ if (import.meta.url === "") {
     SearchDocumentGraphError,
     EmbeddingProvider | ProjectionSearchStore
   > = FindAgenciesSemantically.search("query")
+
   void directSemanticAction
 
   // @ts-expect-error A direct Work route cannot target Agency.

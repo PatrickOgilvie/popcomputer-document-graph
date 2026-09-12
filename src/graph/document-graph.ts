@@ -2,6 +2,7 @@ import {
   Array as EffectArray,
   Effect,
   Function as EffectFunction,
+  Match,
   Option,
   Predicate,
   Schema,
@@ -31,8 +32,8 @@ import {
   InvalidSearchQuery,
   noDocuments,
   prepareSemanticQuery,
-  ProjectionSearchStore,
-  ProjectionTextSearchStore,
+  type ProjectionSearchStore,
+  type ProjectionTextSearchStore,
   searchGraph,
   SearchResultCountSchema,
   semantic,
@@ -76,11 +77,11 @@ import {
 import {
   indexProjectedRevision,
   type ProjectionIndexConflict,
-  ProjectionIndexStore,
+  type ProjectionIndexStore,
   type IndexProjectedRevisionError,
   type IndexProjectedRevisionResult,
 } from "../indexing/projection-index.js"
-import {
+import type {
   EmbeddingProvider,
 } from "../indexing/embedding-provider.js"
 import {
@@ -92,7 +93,7 @@ import {
 } from "./document-graph-operation.js"
 import {
   GraphNeighbourLimitSchema,
-  InvalidGraphRelationOutput,
+  type InvalidGraphRelationOutput,
   type GraphRelationCommit,
   type GraphNeighbourLimit,
   type DefineGraphRelation,
@@ -111,11 +112,11 @@ import type {
   RegisteredVectorProjection,
 } from "../document/vector-projection.js"
 import {
-  InvalidDocumentReference,
+  type InvalidDocumentReference,
   InvalidGraphTraversal,
 } from "./document-graph-errors.js"
-import {
-  type DocumentGraphManifest,
+import type {
+  DocumentGraphManifest,
 } from "./document-graph-schema.js"
 import {
   compileDocumentGraph,
@@ -303,6 +304,7 @@ type GraphProjectionId<Documents extends DocumentDefinitions> = {
 // Each route expands one bounded source batch at a time; four concurrent
 // routes cap relation-store pressure at four reads per retrieval.
 const GraphRetrievalRouteConcurrency = 4
+
 const GraphNeighbourBatchSize = 100
 
 /** Optional graph-owned constraints for one semantic search. */
@@ -1025,6 +1027,7 @@ const schemaSearchLimits = (input?: SchemaSearchOptions) => {
   const results = Schema.decodeSync(SearchResultCountSchema)(
     input?.limit ?? 10,
   )
+
   return {
     results,
     candidates: Schema.decodeSync(SearchResultCountSchema)(
@@ -1075,13 +1078,17 @@ const projectionSearchPlan = (
       input?.strategy,
       textEnabled,
     )
+
     const publicLimit = Schema.decodeSync(RetrievalResultLimitSchema)(
       input?.limit ?? 10,
     )
+
     const results = Schema.decodeSync(SearchResultCountSchema)(publicLimit)
+
     const semanticCandidates = Schema.decodeSync(
       SearchResultCountSchema,
     )(input?.candidates?.semantic ?? 50)
+
     const textCandidates = Schema.decodeSync(SearchResultCountSchema)(
       input?.candidates?.text ?? 50,
     )
@@ -1094,9 +1101,11 @@ const projectionSearchPlan = (
         "Semantic search results cannot exceed semantic candidates",
       )
     }
+
     if (strategy._tag === "Text" && results > textCandidates) {
       throw new Error("Text search results cannot exceed text candidates")
     }
+
     if (
       strategy._tag === "Hybrid" &&
       results > semanticCandidates + textCandidates
@@ -1126,6 +1135,7 @@ const metadataFilters = <Metadata>(
         MetadataSearchValue,
         ...ReadonlyArray<MetadataSearchValue>,
       ]
+
       return metadataOneOf(
         key,
         values,
@@ -1171,31 +1181,30 @@ const bindDocumentGraph = <
   > =>
     Effect.gen(function*() {
       const reference = yield* parseReference(hit.reference)
+
       const candidateProjection = compiled.projectionsByDocumentKind
         .get(reference.kind)
         ?.get(hit.projection.id)
+
       const projection = candidateProjection?.version === hit.projection.version
         ? candidateProjection
         : undefined
+
       if (projection === undefined) {
-        return yield* Effect.fail(
-          new InvalidSearchOutput({ channel, reason: "out_of_scope" }),
-        )
+        return yield* new InvalidSearchOutput({ channel, reason: "out_of_scope" })
       }
 
       if (
         projection.metadataSchema === undefined &&
         hit.metadata !== undefined
       ) {
-        return yield* Effect.fail(
-          new InvalidSearchOutput({ channel, reason: "invalid_metadata" }),
-        )
+        return yield* new InvalidSearchOutput({ channel, reason: "invalid_metadata" })
       }
 
       const metadata =
         projection.metadataSchema === undefined
           ? undefined
-          : yield* Schema.decodeUnknownEffect(projection.metadataSchema)(
+          : yield* Schema.decodeEffect(projection.metadataSchema)(
               hit.metadata,
               { onExcessProperty: "error" },
             ).pipe(
@@ -1209,6 +1218,7 @@ const bindDocumentGraph = <
             )
 
       const parsedHit = { ...hit, reference, metadata }
+
       // SAFETY: The reference, registered projection version, and projection
       // metadata schema all parsed before constructing the graph hit union.
       return parsedHit as AnyGraphSearchHit<GraphId, Documents>
@@ -1225,6 +1235,7 @@ const bindDocumentGraph = <
   > =>
     Effect.gen(function*() {
       const strategy = yield* schemaSearchStrategy(options)
+
       const scopeInput: GraphSearchScopeInput<
         DocumentKind<Documents>,
         GraphProjectionId<Documents>
@@ -1235,10 +1246,12 @@ const bindDocumentGraph = <
         excludeProjections: options?.excludeProjections,
         target,
       }
+
       const searchScope = yield* parseRuntimeSearchOptions(() => ({
         ...scope(scopeInput),
         registered,
       }))
+
       yield* Effect.annotateCurrentSpan({
         "document_graph.search.candidates": strategy.candidates,
         "document_graph.search.limit": strategy.results,
@@ -1249,6 +1262,7 @@ const bindDocumentGraph = <
         scope: searchScope,
         strategy,
       })
+
       return yield* Effect.forEach(hits, (hit) =>
         parseSearchHit(hit, "semantic"),
       )
@@ -1270,22 +1284,22 @@ const bindDocumentGraph = <
   > =>
     Effect.gen(function*() {
       const textPolicy = inputSearch.projection.text
+
       if (
         textPolicy === "disabled" &&
         inputSearch.plan.strategy._tag !== "Semantic"
       ) {
-        return yield* Effect.fail(
-          new InvalidSearchQuery({ reason: "text_disabled" }),
-        )
+        return yield* new InvalidSearchQuery({ reason: "text_disabled" })
       }
 
-      const candidateCount =
-        inputSearch.plan.strategy._tag === "Semantic"
-          ? inputSearch.plan.semanticCandidates
-          : inputSearch.plan.strategy._tag === "Text"
-            ? inputSearch.plan.textCandidates
-            : inputSearch.plan.semanticCandidates +
-              inputSearch.plan.textCandidates
+      const candidateCount = Match.value(inputSearch.plan.strategy).pipe(
+        Match.tagsExhaustive({
+          Semantic: () => inputSearch.plan.semanticCandidates,
+          Text: () => inputSearch.plan.textCandidates,
+          Hybrid: () => inputSearch.plan.semanticCandidates + inputSearch.plan.textCandidates,
+        }),
+      )
+
       const searchScope = makeGraphSearchScope(
         input.id,
         {
@@ -1295,6 +1309,7 @@ const bindDocumentGraph = <
         },
         registered,
       )
+
       yield* Effect.annotateCurrentSpan({
         "document_graph.search.strategy":
           inputSearch.plan.strategy._tag.toLowerCase(),
@@ -1315,6 +1330,7 @@ const bindDocumentGraph = <
         semanticCandidates: inputSearch.plan.semanticCandidates,
         textCandidates: inputSearch.plan.textCandidates,
       })
+
       const searchHits = yield* executeProjectionSearch({
         query: inputSearch.query,
         semanticQuery: inputSearch.semanticQuery,
@@ -1323,18 +1339,14 @@ const bindDocumentGraph = <
 
       return yield* Effect.forEach(searchHits, (hit) => {
         const channel = hit.signals[0].stream.channel
+
         return parseSearchHit(hit, channel).pipe(
-          Effect.flatMap((parsed) =>
-            parsed.reference.kind !== inputSearch.documentKind ||
-            parsed.projection.id !== inputSearch.projection.id ||
-            parsed.projection.version !== inputSearch.projection.version
-              ? Effect.fail(
-                  new InvalidSearchOutput({
-                    channel,
-                    reason: "out_of_scope",
-                  }),
-                )
-              : Effect.succeed(parsed),
+          Effect.filterOrFail(
+            (parsed) =>
+              parsed.reference.kind === inputSearch.documentKind &&
+              parsed.projection.id === inputSearch.projection.id &&
+              parsed.projection.version === inputSearch.projection.version,
+            () => new InvalidSearchOutput({ channel, reason: "out_of_scope" }),
           ),
         )
       })
@@ -1383,31 +1395,36 @@ const bindDocumentGraph = <
       const include = options?.include !== undefined && options.include.length > 0
         ? [...options.include]
         : [...compiled.documentsByKind.keys()]
+
       const includedKinds = new Set<string>(include)
+
       const states = [
         ...(options?.states ?? ["Referenced", "Materialized"]),
       ]
+
       if (
         include.some((kind) => !compiled.documentsByKind.has(kind)) ||
         states.some((state) => !Schema.is(GraphNodeStateSchema)(state)) ||
         (options?.after !== undefined &&
           !Schema.is(DocumentKeySchema)(options.after))
       ) {
-        return yield* Effect.fail(
-          new InvalidGraphTraversal({ reason: "invalid_options" }),
-        )
+        return yield* new InvalidGraphTraversal({ reason: "invalid_options" })
       }
-      const limit = yield* Schema.decodeUnknownEffect(
+
+      const limit = yield* Schema.decodeEffect(
         GraphNodePageLimitSchema,
       )(options?.limit ?? 100).pipe(
         Effect.mapError(
           () => new InvalidGraphTraversal({ reason: "invalid_limit" }),
         ),
       )
+
       if (include.length === 0) {
         return { nodes: [], next: Option.none() }
       }
+
       const store = yield* GraphTopologyStore
+
       const page = yield* store.listNodes({
         graph: input.id,
         documentKinds: include,
@@ -1417,62 +1434,58 @@ const bindDocumentGraph = <
           : Option.some(options.after),
         limit,
       })
+
       if (page.nodes.length > limit) {
-        return yield* Effect.fail(
-          new InvalidGraphTopologyOutput({
-            output: "nodes",
-            reason: "too_many",
-          }),
-        )
+        return yield* new InvalidGraphTopologyOutput({
+          output: "nodes",
+          reason: "too_many",
+        })
       }
 
       const parsed: Array<DocumentGraphNode<GraphId, Documents>> = []
       const seen = new Set<DocumentKey>()
       let previous = options?.after
+
       for (const candidate of page.nodes) {
         if (seen.has(candidate.documentKey)) {
-          return yield* Effect.fail(
-            new InvalidGraphTopologyOutput({
-              output: "nodes",
-              reason: "duplicate",
-            }),
-          )
+          return yield* new InvalidGraphTopologyOutput({
+            output: "nodes",
+            reason: "duplicate",
+          })
         }
+
         if (
           previous !== undefined &&
           String(previous).localeCompare(String(candidate.documentKey)) >= 0
         ) {
-          return yield* Effect.fail(
-            new InvalidGraphTopologyOutput({
-              output: "nodes",
-              reason: "not_ordered",
-            }),
-          )
+          return yield* new InvalidGraphTopologyOutput({
+            output: "nodes",
+            reason: "not_ordered",
+          })
         }
+
         if (
           !Schema.is(GraphNodeStateSchema)(candidate.state) ||
           (include.length > 0 &&
             !includedKinds.has(candidate.reference.kind)) ||
           (states.length > 0 && !states.includes(candidate.state))
         ) {
-          return yield* Effect.fail(
-            new InvalidGraphTopologyOutput({
-              output: "nodes",
-              reason: "out_of_scope",
-            }),
-          )
+          return yield* new InvalidGraphTopologyOutput({
+            output: "nodes",
+            reason: "out_of_scope",
+          })
         }
 
         const reference = yield* parseReference(candidate.reference)
         const parsedKey = yield* key(reference)
+
         if (parsedKey !== candidate.documentKey) {
-          return yield* Effect.fail(
-            new InvalidGraphTopologyOutput({
-              output: "nodes",
-              reason: "invalid_identity",
-            }),
-          )
+          return yield* new InvalidGraphTopologyOutput({
+            output: "nodes",
+            reason: "invalid_identity",
+          })
         }
+
         seen.add(candidate.documentKey)
         previous = candidate.documentKey
         parsed.push({
@@ -1484,19 +1497,19 @@ const bindDocumentGraph = <
 
       if (Option.isSome(page.next)) {
         const last = parsed.at(-1)
+
         if (
           last === undefined ||
           page.next.value !== last.documentKey ||
           parsed.length !== limit
         ) {
-          return yield* Effect.fail(
-            new InvalidGraphTopologyOutput({
-              output: "nodes",
-              reason: "invalid_cursor",
-            }),
-          )
+          return yield* new InvalidGraphTopologyOutput({
+            output: "nodes",
+            reason: "invalid_cursor",
+          })
         }
       }
+
       return { nodes: parsed, next: page.next }
     })
 
@@ -1508,6 +1521,7 @@ const bindDocumentGraph = <
     const definition = compiled.documentsByKind.get(kind) as
       | Documents[Kind]
       | undefined
+
     if (definition === undefined) {
       throw new Error(`Unknown document kind: ${kind}`)
     }
@@ -1526,6 +1540,7 @@ const bindDocumentGraph = <
       const registeredProjection = compiled.projectionsByDocumentKind
         .get(kind)
         ?.get(projectionId)
+
       if (registeredProjection === undefined) {
         throw new Error(
           `Unknown projection ${projectionId} for document ${kind}`,
@@ -1543,22 +1558,23 @@ const bindDocumentGraph = <
         exposeSearchOperation(
           Effect.gen(function*() {
             const textEnabled = registeredProjection.text !== "disabled"
+
             if (
               !textEnabled &&
               projectionStrategyRequiresText(options?.strategy)
             ) {
-              return yield* Effect.fail(
-                new InvalidSearchQuery({ reason: "text_disabled" }),
-              )
+              return yield* new InvalidSearchQuery({ reason: "text_disabled" })
             }
 
             const plan = yield* projectionSearchPlan(
               options,
               textEnabled,
             )
+
             const where = yield* parseRuntimeSearchOptions(() =>
               metadataFilters(options?.where),
             )
+
             return yield* searchProjectionRuntime({
               query,
               documentKind: kind,
@@ -1616,11 +1632,13 @@ const bindDocumentGraph = <
           options?: RetrievalRouteOptions,
         ) => {
           const relation = relations[relationId]
+
           if (relation === undefined || relation.from !== kind) {
             throw new Error(
               `Unknown outgoing relation ${relationId} for ${kind}`,
             )
           }
+
           return {
             _tag: "Relation" as const,
             sourceKind: kind,
@@ -1637,6 +1655,7 @@ const bindDocumentGraph = <
           }
         },
       }
+
       // SAFETY: projectionId was found in this document definition; its
       // runtime version and operations therefore match ProjectionFor.
       // TypeScript cannot directly relate the runtime-validated projection ID
@@ -1662,8 +1681,10 @@ const bindDocumentGraph = <
     ) => {
       const relation = relations[options.via]
       const direction = options.direction ?? "outgoing"
+
       const currentKind =
         direction === "outgoing" ? relation?.from : relation?.to
+
       if (relation === undefined || currentKind !== kind) {
         return Effect.die(
           new Error(
@@ -1673,14 +1694,16 @@ const bindDocumentGraph = <
       }
 
       return Effect.gen(function*() {
-        const limit = yield* Schema.decodeUnknownEffect(
+        const limit = yield* Schema.decodeEffect(
           GraphNeighbourLimitSchema,
         )(options.limit ?? 100).pipe(
           Effect.mapError(
             () => new InvalidGraphTraversal({ reason: "invalid_limit" }),
           ),
         )
+
         const currentDocumentKey = yield* key(ref(kind, id))
+
         return yield* findRuntimeNeighbours({
           currentDocumentKeys: [currentDocumentKey],
           currentDocumentKind: kind,
@@ -1699,6 +1722,7 @@ const bindDocumentGraph = <
         options: RuntimeRelatedOptions,
       ) => {
         const direction = options.direction ?? "outgoing"
+
         return resolveRelatedNodes(id, options).pipe(
           Effect.map((related) => related.map((node) => node.reference)),
           Effect.catchTags({
@@ -1721,6 +1745,7 @@ const bindDocumentGraph = <
           }),
         )
       }
+
       return EffectFunction.cast<
         typeof implementation,
         GraphNeighbours<GraphId, Documents, Relations, Kind>
@@ -1734,19 +1759,22 @@ const bindDocumentGraph = <
         RuntimeRelatedOptions,
     ) => {
       const direction = options.direction ?? "outgoing"
+
       return Effect.gen(function*() {
-        const maximumDocuments = yield* Schema.decodeUnknownEffect(
+        const maximumDocuments = yield* Schema.decodeEffect(
           GraphNeighbourLimitSchema,
         )(options.maximumDocuments).pipe(
           Effect.mapError(
             () => new InvalidGraphTraversal({ reason: "invalid_limit" }),
           ),
         )
+
         const relatedSelection: RuntimeRelatedOptions = {
           via: options.via,
           direction,
           limit: maximumDocuments,
         }
+
         const related = yield* resolveRelatedNodes(id, relatedSelection).pipe(
           Effect.catchTags({
             GraphTopologyStoreFailed: failStoredOperation("search_within"),
@@ -1760,10 +1788,13 @@ const bindDocumentGraph = <
             ),
           }),
         )
+
         const relatedKeys = related.map((node) => node.documentKey)
+
         const target = EffectArray.isReadonlyArrayNonEmpty(relatedKeys)
           ? documentKeys(relatedKeys)
           : noDocuments()
+
         return yield* exposeSearchOperation(
           searchSchemaSemantic(query, options.search, target),
           {
@@ -1779,6 +1810,7 @@ const bindDocumentGraph = <
         )
       })
     }
+
     const searchWithin = EffectFunction.cast<
       typeof searchWithinImplementation,
       GraphSearchWithin<GraphId, Documents, Relations, Kind>
@@ -1807,6 +1839,7 @@ const bindDocumentGraph = <
       remove: (id) =>
         Effect.gen(function*() {
           const documentKey = yield* key(ref(kind, id))
+
           return yield* removeGraphDocumentWorkflow({
             graph: input.id,
             documentKey,
@@ -1860,18 +1893,23 @@ const bindDocumentGraph = <
       Documents,
       TargetKind
     >
+
     type SourceHit = AnyGraphSearchHit<GraphId, Documents>
+
     type RuntimeRoute =
       | DirectRetrievalRoute<string, string>
       | RelationRetrievalRoute<string, string, string, string>
+
     type CompiledRuntimeRoute = {
       readonly route: RuntimeRoute
       readonly projection: RegisteredVectorProjection
     }
+
     type Target = {
       readonly key: DocumentKey
       readonly reference: TargetReference
     }
+
     type ExpandedHit = {
       readonly hit: SourceHit
       readonly targets: ReadonlyArray<Target>
@@ -1884,6 +1922,7 @@ const bindDocumentGraph = <
         // document, projection, relation, and target identities. Runtime checks
         // below reconstruct those same declarations before storing the route.
         const route = selected as RuntimeRoute
+
         if (
           (route._tag === "Direct" &&
             route.sourceKind !== definition.target) ||
@@ -1894,18 +1933,23 @@ const bindDocumentGraph = <
             `Retrieval route ${route.sourceKind}.${route.projection} does not target ${definition.target}`,
           )
         }
+
         const source = input.documents[route.sourceKind]
+
         const projection = source?.projections.find(
           (candidateProjection) =>
             candidateProjection.id === route.projection,
         )
+
         if (source === undefined || projection === undefined) {
           throw new Error(
             `Unknown retrieval projection ${route.sourceKind}.${route.projection}`,
           )
         }
+
         if (route._tag === "Relation") {
           const relation = relations[route.relation]
+
           if (
             relation === undefined ||
             relation.from !== route.sourceKind ||
@@ -1916,6 +1960,7 @@ const bindDocumentGraph = <
             )
           }
         }
+
         return { route, projection }
       })
 
@@ -1934,15 +1979,19 @@ const bindDocumentGraph = <
             direction: "outgoing",
             targetKind: route.targetKind,
           }
+
     const routeId = (route: RuntimeRoute): string => {
       const key = routeKey(route)
+
       return key._tag === "Projection"
         ? `direct:${key.sourceKind}:${key.projection}`
         : `relation:${key.sourceKind}:${key.projection}:${key.relation}:${key.targetKind}`
     }
+
     const routeIds = compiledRoutes.map((compiled) =>
       routeId(compiled.route),
     )
+
     if (new Set(routeIds).size !== routeIds.length) {
       throw new Error("Retrieval routes must have unique structural identities")
     }
@@ -1951,6 +2000,7 @@ const bindDocumentGraph = <
       definition.strategy,
       true,
     )
+
     const channelWeights =
       configuredStrategy._tag === "Hybrid"
         ? [
@@ -1958,6 +2008,7 @@ const bindDocumentGraph = <
             configuredStrategy.weights.text,
           ]
         : [configuredStrategy.weight]
+
     for (const { route } of compiledRoutes) {
       for (const channelWeight of channelWeights) {
         Schema.decodeSync(RetrievalWeightSchema)(
@@ -1969,6 +2020,7 @@ const bindDocumentGraph = <
     const maximumEvidence = Schema.decodeSync(SearchResultCountSchema)(
       definition.maximumEvidencePerTarget ?? 3,
     )
+
     const rankConstant = Schema.decodeSync(
       ReciprocalRankConstantSchema,
     )(
@@ -1984,11 +2036,13 @@ const bindDocumentGraph = <
       readonly route: RuntimeRoute
       readonly expanded: ReadonlyArray<ExpandedHit>
     }
+
     type RetainedEvidence = {
       readonly route: RetrievalRouteKey
       readonly source: SourceHit
       readonly streams: Map<string, RetrievalStreamKey>
     }
+
     type RuntimeRetrievalStream = {
       readonly id: string
       readonly signal: RetrievalStreamKey
@@ -1999,6 +2053,7 @@ const bindDocumentGraph = <
         readonly score: number
       }>
     }
+
     type BuiltRetrievalStreams = {
       readonly targetReferences: ReadonlyMap<DocumentKey, TargetReference>
       readonly evidence: ReadonlyMap<
@@ -2025,6 +2080,7 @@ const bindDocumentGraph = <
         (compiled) =>
           Effect.gen(function*() {
             const route = compiled.route
+
             const hits = yield* exposeSearchOperation(
               searchProjectionRuntime({
                 query,
@@ -2040,6 +2096,7 @@ const bindDocumentGraph = <
                 "document_graph.projection": route.projection,
               },
             )
+
             if (route._tag === "Direct") {
               return {
                 route,
@@ -2058,14 +2115,18 @@ const bindDocumentGraph = <
             }
 
             const uniqueSources = new Map<DocumentKey, SourceHit>()
+
             for (const hit of hits) {
               uniqueSources.set(hit.documentKey, hit)
             }
+
             const sourceKeys = [...uniqueSources.keys()]
             const batches: Array<ReadonlyArray<DocumentKey>> = []
+
             for (let offset = 0; offset < sourceKeys.length; offset += GraphNeighbourBatchSize) {
               batches.push(sourceKeys.slice(offset, offset + GraphNeighbourBatchSize))
             }
+
             const neighbourBatches = yield* Effect.forEach(batches, (documentKeys) =>
               findRuntimeNeighbours({
                 currentDocumentKeys: documentKeys,
@@ -2091,8 +2152,10 @@ const bindDocumentGraph = <
                 }),
               )
             )
+
             const neighbourEntries = neighbourBatches.flat()
             const neighboursBySource = new Map(neighbourEntries)
+
             return {
               route,
               expanded: hits.map((hit) => ({
@@ -2108,25 +2171,31 @@ const bindDocumentGraph = <
       expandedRoutes: ReadonlyArray<ExpandedRoute>,
     ): BuiltRetrievalStreams => {
       const targetReferences = new Map<DocumentKey, TargetReference>()
+
       const evidence = new Map<
         DocumentKey,
         Map<string, RetainedEvidence>
       >()
+
       const streams: Array<RuntimeRetrievalStream> = []
 
       for (const output of expandedRoutes) {
         const keyForRoute = routeKey(output.route)
+
         for (const channel of ["semantic", "text"] as const) {
           const streamKey: RetrievalStreamKey = {
             route: keyForRoute,
             channel,
           }
+
           const streamId = `${routeId(output.route)}:${channel}`
+
           const ranked = output.expanded
             .flatMap((entry) => {
               const signal = entry.hit.signals.find(
                 (candidate) => candidate.stream.channel === channel,
               )
+
               return signal === undefined ? [] : [{ entry, signal }]
             })
             .sort(
@@ -2136,23 +2205,30 @@ const bindDocumentGraph = <
                   String(right.entry.hit.chunkId),
                 ),
             )
+
           const firstRanked = ranked[0]
+
           if (firstRanked === undefined) continue
 
           const seenTargets = new Set<DocumentKey>()
+
           const items: Array<
             RuntimeRetrievalStream["items"][number]
           > = []
+
           for (const { entry, signal } of ranked) {
             for (const target of entry.targets) {
               targetReferences.set(target.key, target.reference)
               let targetEvidence = evidence.get(target.key)
+
               if (targetEvidence === undefined) {
                 targetEvidence = new Map()
                 evidence.set(target.key, targetEvidence)
               }
+
               const evidenceKey = String(entry.hit.chunkId)
               let retained = targetEvidence.get(evidenceKey)
+
               if (retained === undefined) {
                 retained = {
                   route: keyForRoute,
@@ -2161,6 +2237,7 @@ const bindDocumentGraph = <
                 }
                 targetEvidence.set(evidenceKey, retained)
               }
+
               retained.streams.set(streamId, streamKey)
 
               if (!seenTargets.has(target.key)) {
@@ -2173,6 +2250,7 @@ const bindDocumentGraph = <
               }
             }
           }
+
           if (items.length === 0) continue
           streams.push({
             id: streamId,
@@ -2203,11 +2281,13 @@ const bindDocumentGraph = <
           fused.slice(0, resultLimit).map((result, index) => {
             const target = built.targetReferences.get(result.key)
             const retained = built.evidence.get(result.key)
+
             if (target === undefined || retained === undefined) {
               throw new Error(
                 "A fused graph target unexpectedly lost its evidence",
               )
             }
+
             const material = Array.from(retained.values())
               .sort(
                 (left, right) =>
@@ -2221,22 +2301,26 @@ const bindDocumentGraph = <
                 const orderedStreams = Array.from(item.streams.entries())
                   .sort(([left], [right]) => left.localeCompare(right))
                   .map(([, stream]) => stream)
+
                 if (!EffectArray.isReadonlyArrayNonEmpty(orderedStreams)) {
                   throw new Error(
                     "Retained graph evidence unexpectedly has no streams",
                   )
                 }
+
                 return {
                   route: item.route,
                   source: item.source,
                   streams: orderedStreams,
                 }
               })
+
             if (!EffectArray.isReadonlyArrayNonEmpty(material)) {
               throw new Error(
                 "A fused graph target unexpectedly has no evidence",
               )
             }
+
             return {
               rank: index + 1,
               score: result.score,
@@ -2263,24 +2347,27 @@ const bindDocumentGraph = <
               ...definition.candidates,
               ...options?.candidates,
             }
+
             const semanticCandidates = Schema.decodeSync(
               SearchResultCountSchema,
             )(requestedCandidates.semantic ?? 50)
+
             const textCandidates = Schema.decodeSync(
               SearchResultCountSchema,
             )(requestedCandidates.text ?? 50)
+
             const routeResults = Schema.decodeSync(
               SearchResultCountSchema,
             )(
-              configuredStrategy._tag === "Semantic"
-                ? semanticCandidates
-                : configuredStrategy._tag === "Text"
-                  ? textCandidates
-                  : Math.min(
-                      10_000,
-                      semanticCandidates + textCandidates,
-                    ),
+              Match.value(configuredStrategy).pipe(
+                Match.tagsExhaustive({
+                  Semantic: () => semanticCandidates,
+                  Text: () => textCandidates,
+                  Hybrid: () => Math.min(10_000, semanticCandidates + textCandidates),
+                }),
+              ),
             )
+
             const resultLimit = Schema.decodeSync(
               RetrievalResultLimitSchema,
             )(options?.limit ?? 10)
@@ -2297,6 +2384,7 @@ const bindDocumentGraph = <
               } satisfies RuntimeProjectionSearchPlan,
             }
           })
+
           yield* Effect.annotateCurrentSpan({
             "document_graph.search.semantic_candidates":
               searchPlan.semanticCandidates,
@@ -2309,11 +2397,13 @@ const bindDocumentGraph = <
             searchPlan.routePlan.strategy._tag === "Text"
               ? undefined
               : yield* Effect.cached(prepareSemanticQuery(query))
+
           const expanded = yield* expandRoutes(
             query,
             searchPlan.routePlan,
             semanticQuery,
           )
+
           return yield* assembleResults(
             buildStreams(expanded),
             searchPlan.resultLimit,
@@ -2334,6 +2424,7 @@ const bindDocumentGraph = <
           }),
         ),
     }
+
     // SAFETY: The compiled routes and target were validated against the graph
     // schema before this typed retrieval handle was constructed.
     return handle as GraphRetrievalHandle<

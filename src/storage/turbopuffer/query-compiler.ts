@@ -78,6 +78,7 @@ const registeredProjectionFilter = (
       ["document_kind", "Eq", registered.documentKind],
       ["projection_id", "Eq", registered.projection],
     ]
+
     if (registered.projectionVersion !== undefined) {
       filters.push([
         "projection_version",
@@ -85,6 +86,7 @@ const registeredProjectionFilter = (
         registered.projectionVersion,
       ])
     }
+
     return ["And", filters] satisfies TurbopufferFilter
   })
 
@@ -121,6 +123,7 @@ const compileCommonFilter = (input: {
   ]
 
   const registered = registeredProjectionFilter(input.scope)
+
   if (registered !== undefined) filters.push(registered)
 
   if (input.scope.includeDocumentKinds.length > 0) {
@@ -130,6 +133,7 @@ const compileCommonFilter = (input: {
       [...input.scope.includeDocumentKinds],
     ])
   }
+
   if (input.scope.excludeDocumentKinds.length > 0) {
     filters.push([
       "document_kind",
@@ -137,6 +141,7 @@ const compileCommonFilter = (input: {
       [...input.scope.excludeDocumentKinds],
     ])
   }
+
   if (input.scope.includeProjections.length > 0) {
     filters.push([
       "projection_id",
@@ -144,6 +149,7 @@ const compileCommonFilter = (input: {
       [...input.scope.includeProjections],
     ])
   }
+
   if (input.scope.excludeProjections.length > 0) {
     filters.push([
       "projection_id",
@@ -163,6 +169,7 @@ const compileCommonFilter = (input: {
   filters.push(
     ...input.scope.where.map(compileTurbopufferMetadataFilter),
   )
+
   return ["And", filters]
 }
 
@@ -178,6 +185,7 @@ export const compileTurbopufferSemanticQuery = (input: {
   readonly candidates: SearchResultCount
 }): CompiledTurbopufferQuery => {
   const filters = compileCommonFilter(input)
+
   if (filters === undefined) return noDocuments()
 
   if (
@@ -201,6 +209,7 @@ export const compileTurbopufferSemanticQuery = (input: {
 type EnabledTextSearchPolicy = Exclude<TextSearchPolicy, "disabled">
 
 type Bm25Clause = [attribute: string, operator: "BM25", query: string]
+
 type WeightedBm25Clause = [
   operator: "Product",
   weight: number,
@@ -216,6 +225,7 @@ const compileWeightedBm25 = (
 
   for (const field of ["context", "label", "content"] as const) {
     const weight = policy.weights[field]
+
     if (weight > 0) {
       clauses.push([
         "Product",
@@ -237,6 +247,7 @@ export const compileTurbopufferTextQuery = (input: {
   readonly candidates: SearchResultCount
 }): CompiledTurbopufferQuery => {
   const filters = compileCommonFilter(input)
+
   if (filters === undefined) return noDocuments()
 
   return executableQuery({
@@ -264,6 +275,7 @@ export const compileTurbopufferHybridQuery = (input: {
     queryVector: input.queryVector,
     candidates: input.semanticCandidates,
   })
+
   if (semantic._tag === "NoDocuments") return semantic
 
   const text = compileTurbopufferTextQuery({
@@ -273,6 +285,7 @@ export const compileTurbopufferHybridQuery = (input: {
     policy: input.policy,
     candidates: input.textCandidates,
   })
+
   if (text._tag === "NoDocuments") return text
 
   return {

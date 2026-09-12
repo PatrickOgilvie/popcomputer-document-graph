@@ -27,6 +27,7 @@ import { inMemoryDocumentGraph } from "../src/in-memory.js"
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("PreparedArticleId"),
 )
+
 const Article = Schema.Struct({
   id: ArticleId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -38,6 +39,7 @@ const Article = Schema.Struct({
     }),
   ),
 })
+
 const articleDocument = <const Version extends string>(version: Version) =>
   defineDocument({
     id: ArticleId,
@@ -58,17 +60,23 @@ const articleDocument = <const Version extends string>(version: Version) =>
   })
 
 const ArticleDocument = articleDocument("v1")
+
 const ArticleDocumentV2 = articleDocument("v2")
+
 const graph = defineDocumentGraph({
   id: "prepared-mutations",
   documents: { Article: ArticleDocument },
 })
+
 const graphV2 = defineDocumentGraph({
   id: "prepared-mutations",
   documents: { Article: ArticleDocumentV2 },
 })
+
 const ArticleNode = graph.document("Article")
+
 const ArticleContent = ArticleNode.projection("article-content")
+
 const ArticleContentV2 = graphV2
   .document("Article")
   .projection("article-content")
@@ -78,6 +86,7 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 1,
 })
+
 const embeddings: EmbeddingProviderService = {
   profile,
   embedDocuments: (requests) =>
@@ -124,8 +133,10 @@ const makeFreshStorage = (): Effect.Effect<DocumentGraphStorageService> => Effec
     const projection: ProjectionIndexStoreService = yield* ProjectionIndexStore
     const topology: GraphTopologyStoreService = yield* GraphTopologyStore
     const semantic: ProjectionSearchStoreService = yield* ProjectionSearchStore
+
     const text: ProjectionTextSearchStoreService =
       yield* ProjectionTextSearchStore
+
     return { ...projection, ...semantic, ...text, ...topology }
   },
 ).pipe(Effect.provide(inMemoryDocumentGraph()))
@@ -142,6 +153,7 @@ const storageLayer = (storage: DocumentGraphStorageService) =>
 describe("prepared graph mutations", () => {
   test("captures, orders, copies, and deeply freezes replacements", async () => {
     const retainedVector = [1]
+
     const aliasingEmbeddings: EmbeddingProviderService = {
       ...embeddings,
       embedDocuments: (requests) =>
@@ -152,6 +164,7 @@ describe("prepared graph mutations", () => {
           })),
         ),
     }
+
     const live = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, aliasingEmbeddings),
       inMemoryDocumentGraph(),
@@ -164,6 +177,7 @@ describe("prepared graph mutations", () => {
         Effect.provide(live),
       ),
     )
+
     const prepared = captured.mutation
 
     retainedVector[0] = 9
@@ -180,12 +194,15 @@ describe("prepared graph mutations", () => {
     ).toBe(true)
 
     const [projection, relations] = prepared.operations
+
     if (projection?._tag !== "ReplaceProjectedRevision") {
       throw new Error("expected a projection replacement")
     }
+
     if (relations?._tag !== "ReplaceOutgoingGraphRelations") {
       throw new Error("expected a relation replacement")
     }
+
     expect(projection.input.embeddings[0]?.vector).toEqual([1])
     expect(Object.isFrozen(projection.input)).toBe(true)
     expect(Object.isFrozen(projection.input.key)).toBe(true)
@@ -220,10 +237,13 @@ describe("prepared graph mutations", () => {
         )
 
         const operation = captured.mutation.operations[0]
+
         if (operation?._tag !== "ReplaceProjectedRevision") {
-          throw new Error("expected a projection replacement")
+          return yield* Effect.die(new Error("expected a projection replacement"))
         }
+
         const [lookup] = yield* directStorage.loadRevisions([operation.input.key])
+
         return {
           operation,
           prepared: captured.mutation,
@@ -235,6 +255,7 @@ describe("prepared graph mutations", () => {
     )
 
     const operation = prepared.operations[0]
+
     if (operation?._tag !== "ReplaceProjectedRevision") {
       throw new Error("expected a projection replacement")
     }
@@ -244,6 +265,7 @@ describe("prepared graph mutations", () => {
         const storage = yield* makeFreshStorage()
         const replay = yield* replayPreparedGraphMutation(prepared, storage)
         const [lookup] = yield* storage.loadRevisions([operation.input.key])
+
         return {
           report: replay,
           replayed: lookup?.revision._tag === "Some"
@@ -252,10 +274,12 @@ describe("prepared graph mutations", () => {
         }
       }),
     )
+
     expect(report).toEqual({ replacedRevisions: 1, replacedRelationSets: 0 })
 
     expect(direct).toBeDefined()
     expect(replayed).toBeDefined()
+
     if (direct !== undefined && replayed !== undefined) {
       expect(replayed.revisionHash).toBe(direct.revisionHash)
       expect(replayed.chunks).toEqual(direct.chunks)
@@ -264,6 +288,7 @@ describe("prepared graph mutations", () => {
 
   test("capture performs no storage writes", async () => {
     const writeGuarded = await Effect.runPromise(makeWriteGuardedStorageLayer())
+
     const live = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings),
       Layer.succeed(ProjectionIndexStore, writeGuarded),
@@ -284,10 +309,12 @@ describe("prepared graph mutations", () => {
 
   test("delete and prune operations fail without reaching live storage", async () => {
     const writeGuarded = await Effect.runPromise(makeWriteGuardedStorageLayer())
+
     const live = Layer.mergeAll(
       Layer.succeed(ProjectionIndexStore, writeGuarded),
       Layer.succeed(GraphTopologyStore, writeGuarded),
     )
+
     const revision = await Effect.runPromise(
       ArticleContent.project(article("abababab", "Guarded body.")),
     )
@@ -298,6 +325,7 @@ describe("prepared graph mutations", () => {
           yield* Effect.result(prepareGraphMutation(
             Effect.gen(function*() {
               const projection = yield* ProjectionIndexStore
+
               return yield* projection.deleteRevision({
               documentKey: revision.documentKey,
               projection: revision.projection.id,
@@ -307,6 +335,7 @@ describe("prepared graph mutations", () => {
           yield* Effect.result(prepareGraphMutation(
             Effect.gen(function*() {
               const projection = yield* ProjectionIndexStore
+
               return yield* projection.pruneGraph({
                 graph: graph.id,
                 registered: [],
@@ -316,6 +345,7 @@ describe("prepared graph mutations", () => {
           yield* Effect.result(prepareGraphMutation(
             Effect.gen(function*() {
               const topology = yield* GraphTopologyStore
+
               return yield* topology.deleteNode({
                 graph: graph.id,
                 documentKey: revision.documentKey,
@@ -325,6 +355,7 @@ describe("prepared graph mutations", () => {
           yield* Effect.result(prepareGraphMutation(
             Effect.gen(function*() {
               const topology = yield* GraphTopologyStore
+
               return yield* topology.pruneTopology({
                 graph: graph.id,
                 registered: [],
@@ -357,8 +388,10 @@ describe("prepared graph mutations", () => {
     )
 
     expect(Result.isFailure(outcome)).toBe(true)
+
     if (Result.isFailure(outcome)) {
       expect(outcome.failure._tag).toBe("DuplicatePreparedMutation")
+
       if (outcome.failure._tag === "DuplicatePreparedMutation") {
         expect(outcome.failure.identity).toContain("article-content")
       }
@@ -376,6 +409,7 @@ describe("prepared graph mutations", () => {
         const captured = yield* prepareGraphMutation(
           ArticleContent.index(article("ffffffff", "No network.")),
         )
+
         return captured.mutation
       }).pipe(Effect.provide(live)),
     )
@@ -383,9 +417,11 @@ describe("prepared graph mutations", () => {
     const report = await Effect.runPromise(
       Effect.gen(function*() {
         const storage = yield* makeFreshStorage()
+
         return yield* replayPreparedGraphMutation(prepared, storage)
       }),
     )
+
     expect(report.replacedRevisions).toBe(1)
   })
 
@@ -394,6 +430,7 @@ describe("prepared graph mutations", () => {
       Layer.succeed(EmbeddingProvider, embeddings),
       inMemoryDocumentGraph(),
     )
+
     const prepared = await Effect.runPromise(
       prepareGraphMutation(
         ArticleNode.index(article("12121212", "Persisted body.")),
@@ -406,9 +443,11 @@ describe("prepared graph mutations", () => {
     const encoded = await Effect.runPromise(
       encodePreparedGraphMutation(prepared),
     )
+
     const artifact = Schema.decodeUnknownSync(
       PreparedGraphMutationArtifactSchema,
     )(JSON.parse(encoded), { onExcessProperty: "error" })
+
     expect(artifact.schemaVersion).toBe(1)
 
     const restored = await Effect.runPromise(
@@ -417,6 +456,7 @@ describe("prepared graph mutations", () => {
         operations: [...artifact.operations].reverse(),
       })),
     )
+
     expect(await Effect.runPromise(encodePreparedGraphMutation(restored)))
       .toBe(encoded)
     expect(restored).toEqual(prepared)
@@ -429,9 +469,11 @@ describe("prepared graph mutations", () => {
     const projection = restored.operations.find(
       (operation) => operation._tag === "ReplaceProjectedRevision",
     )
+
     if (projection?._tag !== "ReplaceProjectedRevision") {
       throw new Error("expected a projection replacement")
     }
+
     expect(Object.isFrozen(projection.input.chunks[0])).toBe(true)
     expect(Object.isFrozen(projection.input.chunks[0].text)).toBe(true)
     expect(Object.isFrozen(projection.input.embeddings[0]?.vector)).toBe(true)
@@ -442,6 +484,7 @@ describe("prepared graph mutations", () => {
       Layer.succeed(EmbeddingProvider, embeddings),
       inMemoryDocumentGraph(),
     )
+
     const prepared = await Effect.runPromise(
       prepareGraphMutation(
         ArticleNode.index(article("34343434", "Rejected body.")),
@@ -450,26 +493,33 @@ describe("prepared graph mutations", () => {
         Effect.provide(live),
       ),
     )
+
     const encoded = await Effect.runPromise(
       encodePreparedGraphMutation(prepared),
     )
+
     const artifact = Schema.decodeUnknownSync(
       PreparedGraphMutationArtifactSchema,
     )(JSON.parse(encoded), { onExcessProperty: "error" })
+
     const projection = artifact.operations.find(
       (operation) => operation._tag === "ReplaceProjectedRevision",
     )
+
     const topology = artifact.operations.find(
       (operation) => operation._tag === "ReplaceOutgoingGraphRelations",
     )
+
     if (projection?._tag !== "ReplaceProjectedRevision") {
       throw new Error("expected a projection replacement")
     }
+
     if (topology?._tag !== "ReplaceOutgoingGraphRelations") {
       throw new Error("expected a topology replacement")
     }
 
     const firstChunk = projection.input.chunks[0]
+
     const cases = [
       {
         encoded: "{",
@@ -539,7 +589,9 @@ describe("prepared graph mutations", () => {
       const outcome = await Effect.runPromise(
         Effect.result(decodePreparedGraphMutation(item.encoded)),
       )
+
       expect(Result.isFailure(outcome)).toBe(true)
+
       if (Result.isFailure(outcome)) {
         expect(outcome.failure.reason).toBe(item.reason)
         expect(outcome.failure.detail).toContain(item.detail)

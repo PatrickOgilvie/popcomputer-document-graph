@@ -35,6 +35,7 @@ export const indexGraphDocumentWorkflow = Effect.fn(
     definition: input.definition,
     value: input.value,
   })
+
   const projectedRevisions = yield* Effect.forEach(
     input.definition.projections,
     (projection) =>
@@ -46,6 +47,7 @@ export const indexGraphDocumentWorkflow = Effect.fn(
         document,
       ),
   )
+
   const outgoing = yield* projectOutgoingGraphRelationsForInstance({
     graph: input.graph,
     documentKind: input.documentKind,
@@ -53,6 +55,7 @@ export const indexGraphDocumentWorkflow = Effect.fn(
     relations: input.relations,
     document,
   })
+
   const projections = yield* Effect.forEach(
     projectedRevisions,
     (revision) =>
@@ -63,8 +66,10 @@ export const indexGraphDocumentWorkflow = Effect.fn(
         })),
       ),
   )
+
   const topologyStore = yield* GraphTopologyStore
   const relations = yield* topologyStore.replaceDocumentTopology(outgoing)
+
   return { projections, relations }
 })
 
@@ -79,12 +84,14 @@ export const removeGraphDocumentWorkflow = Effect.fn(
   "DocumentGraph.removeDocument",
 )(function*(input: RemoveGraphDocumentWorkflowInput) {
   const projectionStore = yield* ProjectionIndexStore
+
   const deletions = yield* Effect.forEach(input.projections, (projection) =>
     projectionStore.deleteRevision({
       documentKey: input.documentKey,
       projection,
     })
   )
+
   const projectionDeletion = deletions.reduce(
     (total, deletion) => ({
       deletedRevisions: total.deletedRevisions + deletion.deletedRevisions,
@@ -92,11 +99,14 @@ export const removeGraphDocumentWorkflow = Effect.fn(
     }),
     { deletedRevisions: 0, deletedChunks: 0 },
   )
+
   const topologyStore = yield* GraphTopologyStore
+
   const topologyDeletion = yield* topologyStore.deleteNode({
     graph: input.graph,
     documentKey: input.documentKey,
   })
+
   return {
     ...projectionDeletion,
     deletedRelations: topologyDeletion.deletedRelations,

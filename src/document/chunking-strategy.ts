@@ -154,14 +154,16 @@ export const defineChunker = <
     Version,
     ConfigSchema["Type"]
   > => {
-    const config = Schema.decodeUnknownSync(definition.config)(
+    const config = Schema.decodeSync(definition.config)(
       configInput,
       { onExcessProperty: "error" },
     )
+
     const encodedConfig = Schema.decodeUnknownSync(JsonValueSchema)(
       Schema.encodeSync(definition.config)(config),
       { onExcessProperty: "error" },
     )
+
     const maximumCharacters = Schema.decodeSync(
       ChunkMaximumCharactersSchema,
     )(definition.maximumCharacters(config))
@@ -192,11 +194,14 @@ const splitAtReadableBoundaries = (
 
   while (remaining.length > maximumCharacters) {
     const window = remaining.slice(0, maximumCharacters + 1)
+
     const readableBoundary = Math.max(
       window.lastIndexOf("\n"),
       window.lastIndexOf(" "),
     )
+
     const minimumReadableBoundary = Math.floor(maximumCharacters * 0.6)
+
     const end =
       readableBoundary >= minimumReadableBoundary
         ? readableBoundary
@@ -224,10 +229,13 @@ const sectionChunker = defineChunker({
   maximumCharacters: (config) => config.maximumCharacters,
   chunk: ({ context, section, config }) => {
     const fragments: Array<ChunkFragment> = []
+
     const prefix = [context, section.label]
       .flatMap((part) => (part === undefined ? [] : [part]))
       .join("\n\n")
+
     const separator = prefix.length === 0 ? "" : "\n\n"
+
     const bodyBudget =
       config.maximumCharacters - prefix.length - separator.length
 
@@ -244,6 +252,7 @@ const sectionChunker = defineChunker({
       section.content,
       bodyBudget,
     )
+
     for (const part of parts) {
       fragments.push(
         prefix.length === 0

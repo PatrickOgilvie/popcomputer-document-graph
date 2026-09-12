@@ -75,9 +75,11 @@ const HybridStrategyInputSchema = Schema.Struct({
 })
 
 const DefaultWeight = Schema.decodeSync(RetrievalWeightSchema)(1)
+
 const DefaultRankConstant = Schema.decodeSync(
   ReciprocalRankConstantSchema,
 )(60)
+
 const DefaultHybridStrategy = Schema.decodeSync(
   HybridStrategyInputSchema,
 )({ mode: "hybrid" })
@@ -88,6 +90,7 @@ export const parseRetrievalStrategy = (
   textEnabled: boolean,
 ): RetrievalStrategy => {
   const selected = input ?? (textEnabled ? "hybrid" : "semantic")
+
   if (selected === "semantic") {
     return {
       _tag: "Semantic",
@@ -100,6 +103,7 @@ export const parseRetrievalStrategy = (
     if (!textEnabled) {
       throw new Error("Text retrieval is disabled for this projection")
     }
+
     return {
       _tag: "Text",
       weight: DefaultWeight,
@@ -114,7 +118,7 @@ export const parseRetrievalStrategy = (
   const parsed =
     selected === "hybrid"
       ? DefaultHybridStrategy
-      : Schema.decodeUnknownSync(HybridStrategyInputSchema)(selected, {
+      : Schema.decodeSync(HybridStrategyInputSchema)(selected, {
           onExcessProperty: "error",
         })
 

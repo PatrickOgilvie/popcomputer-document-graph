@@ -41,6 +41,7 @@ const MetadataSearchValueSchema = Schema.Union([
   Schema.Finite,
   Schema.String,
 ])
+
 const MetadataRecordSchema = Schema.Record(Schema.String, JsonValueSchema)
 
 /** Compile all searchable top-level metadata fields retained on one row. */
@@ -52,12 +53,15 @@ export const encodeTurbopufferMetadataTerms = (
   }
 
   const terms: Array<string> = []
+
   for (const key of Object.keys(metadata).sort()) {
     const value = metadata[key]
+
     if (value !== undefined && Schema.is(MetadataSearchValueSchema)(value)) {
       terms.push(makeTurbopufferMetadataTerm(key, value))
     }
   }
+
   return terms
 }
 

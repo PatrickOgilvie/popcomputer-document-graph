@@ -45,6 +45,7 @@ export const compileDocumentGraph = <
   input: DefineDocumentGraphInput<GraphId, Documents, Relations>,
 ): CompiledDocumentGraph<GraphId, Documents, Relations> => {
   const defineRelation: DefineGraphRelation<Documents> = (relation) => relation
+
   // SAFETY: The empty default agrees with Relations' default. A supplied
   // callback is already constrained by DefineDocumentGraphInput.
   const relations = (input.relations === undefined
@@ -55,10 +56,12 @@ export const compileDocumentGraph = <
   assertValidGraphRelations(input.documents, relations)
 
   const documentsByKind = new Map<string, RegisteredDocumentDefinition>()
+
   const projectionsByDocumentKind = new Map<
     string,
     ReadonlyMap<string, RegisteredVectorProjection>
   >()
+
   for (const [kind, document] of Object.entries(input.documents)) {
     documentsByKind.set(kind, document)
     projectionsByDocumentKind.set(

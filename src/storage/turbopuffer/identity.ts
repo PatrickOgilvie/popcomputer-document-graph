@@ -15,9 +15,11 @@ const primitiveJson = (
   value: null | boolean | number | string,
 ): string => {
   const encoded = JSON.stringify(value)
+
   if (encoded === undefined) {
     throw new Error("A JSON primitive unexpectedly failed to encode")
   }
+
   return encoded
 }
 
@@ -26,21 +28,25 @@ export const canonicalTurbopufferJson = (value: JsonValue): string => {
   if (Schema.is(JsonPrimitiveSchema)(value)) {
     return primitiveJson(value)
   }
+
   if (Array.isArray(value)) {
     return `[${value.map(canonicalTurbopufferJson).join(",")}]`
   }
 
   // SAFETY: JsonValue contains only primitives, arrays, and string-keyed records.
   const record = value as Readonly<Record<string, JsonValue>>
+
   return `{${Object.keys(record)
     .sort()
     .map((key) => {
       const item = record[key]
+
       if (item === undefined) {
         throw new Error(
           "A parsed JSON object unexpectedly contained undefined",
         )
       }
+
       return `${primitiveJson(key)}:${canonicalTurbopufferJson(item)}`
     })
     .join(",")}}`

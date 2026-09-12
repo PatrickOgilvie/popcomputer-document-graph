@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect"
+import { Context, type Effect, Schema } from "effect"
 import type { ContentHash } from "../document/document-identity.js"
 
 /** Stable identity for one embedding model and configuration. */

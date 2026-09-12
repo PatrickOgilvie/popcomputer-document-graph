@@ -49,9 +49,11 @@ const jsonResponse = (
   headers?: HeadersInit,
 ): Response => {
   const responseHeaders = new Headers(headers)
+
   if (!responseHeaders.has("content-type")) {
     responseHeaders.set("content-type", "application/json")
   }
+
   return new Response(JSON.stringify(body), {
     status,
     headers: responseHeaders,
@@ -71,6 +73,7 @@ const withEnvironmentValue = <A>(
 ): A => {
   const previous = process.env[name]
   process.env[name] = value
+
   try {
     return run()
   } finally {
@@ -96,7 +99,9 @@ const recordingFetch = (
       method: init?.method ?? "GET",
       authorization: new Headers(init?.headers).get("authorization"),
     }
+
     requests.push(request)
+
     return respond(requests.length, request, init)
   }
 
@@ -123,9 +128,11 @@ const captureFailure = async (
         Effect.succeed({ _tag: "Failure" as const, error })),
     ),
   )
+
   if (outcome._tag === "Success") {
     throw new Error("Expected Turbopuffer request to fail")
   }
+
   return outcome.error
 }
 
@@ -137,11 +144,13 @@ const expectProviderDelay = async (
   await Effect.runPromise(
     Effect.gen(function* () {
       const firstAttempt = yield* Deferred.make<void>()
+
       const client = makeOfficialTurbopufferClient(
         clientConfig(
           recordingFetch(requests, (attempt) => {
             if (attempt !== 1) return jsonResponse({})
-            Effect.runSync(Deferred.succeed(firstAttempt, undefined))
+            Deferred.doneUnsafe(firstAttempt, Exit.succeed(undefined))
+
             return jsonResponse(
               { error: { message: "retry later" } },
               429,
@@ -151,6 +160,7 @@ const expectProviderDelay = async (
           { retries: 1 },
         ),
       )
+
       const fiber = yield* client.query({ rank_by: ["id", "asc"] }).pipe(
         Effect.forkChild,
       )
@@ -176,12 +186,14 @@ describe("Turbopuffer client boundary", () => {
   test("uses a redacted canonical API key and never includes rejected input in diagnostics", async () => {
     const requests: Array<RecordedRequest> = []
     const apiKey = Redacted.make("sensitive-client-test-key")
+
     const config: TurbopufferClientConfig = {
       apiKey,
       partition,
       retries: 0,
       fetch: recordingFetch(requests),
     }
+
     const client = makeOfficialTurbopufferClient(config)
 
     await Effect.runPromise(client.query({ rank_by: ["id", "asc"] }))
@@ -195,6 +207,7 @@ describe("Turbopuffer client boundary", () => {
 
     for (const rawValue of ["", "   ", " sensitive-client-test-key "]) {
       let cause: unknown
+
       try {
         makeOfficialTurbopufferClient({
           ...config,
@@ -203,6 +216,7 @@ describe("Turbopuffer client boundary", () => {
       } catch (error: unknown) {
         cause = error
       }
+
       expect(cause).toMatchObject({
         _tag: "InvalidTurbopufferConfiguration",
         field: "api_key",
@@ -215,6 +229,7 @@ describe("Turbopuffer client boundary", () => {
 
   test("keeps the configured API key authoritative over ambient custom headers", async () => {
     const requests: Array<RecordedRequest> = []
+
     const client = withEnvironmentValue(
       "TURBOPUFFER_CUSTOM_HEADERS",
       "Authorization: Bearer ambient-client-test-key",
@@ -236,6 +251,7 @@ describe("Turbopuffer client boundary", () => {
 
   test("derives a custom base URL solely from the canonical partition", async () => {
     const requests: Array<RecordedRequest> = []
+
     const customPartition = makeTurbopufferWorkspacePartition({
       workspace: "custom-client-boundary-test",
       deploymentId: "test-custom-deployment",
@@ -246,6 +262,7 @@ describe("Turbopuffer client boundary", () => {
       embeddingProfile: profile,
       schemaGeneration: 1,
     })
+
     const client = withEnvironmentValue(
       "TURBOPUFFER_REGION",
       "ambient-region",
@@ -266,6 +283,7 @@ describe("Turbopuffer client boundary", () => {
 
   test("derives a regional base URL solely from the canonical partition", async () => {
     const requests: Array<RecordedRequest> = []
+
     const client = withEnvironmentValue(
       "TURBOPUFFER_BASE_URL",
       "https://ambient.example.test/{region}",
@@ -297,12 +315,15 @@ describe("Turbopuffer client boundary", () => {
       true,
       true,
     ]
+
     expect(requestTypesOmitNamespace).toEqual([true, true, true, true])
 
     const requests: Array<RecordedRequest> = []
+
     const client = makeOfficialTurbopufferClient(
       clientConfig(recordingFetch(requests)),
     )
+
     const override = "other-workspace"
 
     const writeRequest: Parameters<
@@ -311,18 +332,21 @@ describe("Turbopuffer client boundary", () => {
       deletes: [],
       namespace: override,
     }
+
     const queryRequest: Parameters<
       TurbopufferClientService["query"]
     >[0] & { readonly namespace: string } = {
       rank_by: ["id", "asc"],
       namespace: override,
     }
+
     const multiQueryRequest: Parameters<
       TurbopufferClientService["multiQuery"]
     >[0] & { readonly namespace: string } = {
       queries: [{ rank_by: ["id", "asc"] }],
       namespace: override,
     }
+
     const updateSchemaRequest: Parameters<
       TurbopufferClientService["updateSchema"]
     >[0] & { readonly namespace: string } = {
@@ -346,6 +370,7 @@ describe("Turbopuffer client boundary", () => {
 
   test("disables the SDK write retry override per request", async () => {
     const requests: Array<RecordedRequest> = []
+
     const client = makeOfficialTurbopufferClient(
       clientConfig(recordingFetch(
         requests,
@@ -365,6 +390,7 @@ describe("Turbopuffer client boundary", () => {
 
   test("classifies lock conflicts and retries them through Effect", async () => {
     const requests: Array<RecordedRequest> = []
+
     const client = makeOfficialTurbopufferClient(
       clientConfig(
         recordingFetch(
@@ -385,19 +411,23 @@ describe("Turbopuffer client boundary", () => {
 
   test("keeps the aggregate write outcome unknown after an ambiguous attempt", async () => {
     const requests: Array<RecordedRequest> = []
-    const failure = await Effect.runPromise(
+
+    const outcome = await Effect.runPromise(
       Effect.gen(function* () {
         const firstAttempt = yield* Deferred.make<void>()
+
         const client = makeOfficialTurbopufferClient(
           clientConfig(
             recordingFetch(requests, (attempt) => {
               if (attempt === 1) {
-                Effect.runSync(Deferred.succeed(firstAttempt, undefined))
+                Deferred.doneUnsafe(firstAttempt, Exit.succeed(undefined))
+
                 return jsonResponse(
                   { error: { message: "ambiguous provider failure" } },
                   500,
                 )
               }
+
               return jsonResponse(
                 { error: { message: "definite final rejection" } },
                 400,
@@ -406,13 +436,15 @@ describe("Turbopuffer client boundary", () => {
             { retries: 1 },
           ),
         )
+
         const fiber = yield* client.write({ deletes: ["row-1"] }).pipe(
-          Effect.flip,
+          Effect.result,
           Effect.forkChild,
         )
 
         yield* Deferred.await(firstAttempt)
         yield* TestClock.adjust("1 second")
+
         return yield* Fiber.join(fiber)
       }).pipe(
         Random.withSeed("turbopuffer-aggregate-write-outcome"),
@@ -421,12 +453,14 @@ describe("Turbopuffer client boundary", () => {
     )
 
     expect(requests).toHaveLength(2)
-    expect(failure.reason).toBe("rejected")
-    expect(failure.requestOutcome).toBe("unknown")
+    expect(outcome).toMatchObject({
+      failure: { reason: "rejected", requestOutcome: "unknown" },
+    })
   })
 
   test("obeys explicit provider retry decisions", async () => {
     const deniedRequests: Array<RecordedRequest> = []
+
     const deniedClient = makeOfficialTurbopufferClient(
       clientConfig(
         recordingFetch(
@@ -453,11 +487,13 @@ describe("Turbopuffer client boundary", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const firstAttempt = yield* Deferred.make<void>()
+
         const allowedClient = makeOfficialTurbopufferClient(
           clientConfig(
             recordingFetch(allowedRequests, (attempt) => {
               if (attempt !== 1) return jsonResponse({})
-              Effect.runSync(Deferred.succeed(firstAttempt, undefined))
+              Deferred.doneUnsafe(firstAttempt, Exit.succeed(undefined))
+
               return jsonResponse(
                 { error: { message: "retry this rejection" } },
                 400,
@@ -467,6 +503,7 @@ describe("Turbopuffer client boundary", () => {
             { retries: 1 },
           ),
         )
+
         const fiber = yield* allowedClient.query({
           rank_by: ["id", "asc"],
         }).pipe(Effect.forkChild)
@@ -498,13 +535,16 @@ describe("Turbopuffer client boundary", () => {
 
   test("interrupts a provider-directed retry wait without another request", async () => {
     const requests: Array<RecordedRequest> = []
+
     const interrupted = await Effect.runPromise(
       Effect.gen(function* () {
         const firstAttempt = yield* Deferred.make<void>()
+
         const client = makeOfficialTurbopufferClient(
           clientConfig(
             recordingFetch(requests, () => {
-              Effect.runSync(Deferred.succeed(firstAttempt, undefined))
+              Deferred.doneUnsafe(firstAttempt, Exit.succeed(undefined))
+
               return jsonResponse(
                 { error: { message: "retry later" } },
                 429,
@@ -514,6 +554,7 @@ describe("Turbopuffer client boundary", () => {
             { retries: 1 },
           ),
         )
+
         const fiber = yield* client.query({ rank_by: ["id", "asc"] }).pipe(
           Effect.forkChild,
         )
@@ -522,6 +563,7 @@ describe("Turbopuffer client boundary", () => {
         yield* Fiber.interrupt(fiber)
         const exit = yield* Fiber.await(fiber)
         yield* TestClock.adjust("5 seconds")
+
         return Exit.hasInterrupts(exit)
       }).pipe(
         Random.withSeed("turbopuffer-retry-cancellation"),
@@ -541,6 +583,7 @@ describe("Turbopuffer client boundary", () => {
 
     for (const fixture of cases) {
       const requests: Array<RecordedRequest> = []
+
       const client = makeOfficialTurbopufferClient(
         clientConfig(
           recordingFetch(
@@ -564,21 +607,29 @@ describe("Turbopuffer client boundary", () => {
 
   test("classifies the SDK timeout subclass before the base API error", async () => {
     const requests: Array<RecordedRequest> = []
+
     const fetch = recordingFetch(requests, (_attempt, _request, init) =>
       new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal
+
         if (signal === undefined || signal === null) {
           reject(new Error("Expected the SDK to provide a timeout signal"))
+
           return
         }
+
         const rejectOnAbort = () =>
           reject(new DOMException("The operation was aborted", "AbortError"))
+
         if (signal.aborted) {
           rejectOnAbort()
+
           return
         }
+
         signal.addEventListener("abort", rejectOnAbort, { once: true })
       }))
+
     const client = makeOfficialTurbopufferClient(
       clientConfig(fetch, { timeoutMilliseconds: 1 }),
     )

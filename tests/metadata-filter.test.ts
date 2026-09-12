@@ -48,7 +48,9 @@ describe("metadata filters", () => {
     const leaves = Array.from({ length: 101 }, (_, index) =>
       metadataEquals("position", index),
     )
+
     const [first, ...rest] = leaves
+
     if (first === undefined) throw new Error("Missing leaf fixture")
 
     expect(() => metadataAll(first, ...rest)).toThrow(
@@ -58,6 +60,7 @@ describe("metadata filters", () => {
 
   test("bounds an expression to depth 8", () => {
     let filter: MetadataFilter = metadataEquals("visibility", "public")
+
     for (let depth = 2; depth <= 8; depth += 1) {
       filter = metadataNot(filter)
     }

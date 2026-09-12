@@ -1,12 +1,12 @@
 import { Effect, Result, Schema } from "effect"
-import {
-  type DocumentDefinitions,
-  type DocumentId,
-  type DocumentKind,
-  type DocumentValue,
+import type {
+  DocumentDefinitions,
+  DocumentId,
+  DocumentKind,
+  DocumentValue,
 } from "../document/document-definition.js"
 import {
-  InvalidDocumentValue,
+  type InvalidDocumentValue,
   parseDocumentInstance,
   type EncodedDocumentReference,
   type ParsedDocumentInstance,
@@ -163,6 +163,7 @@ export const planOutgoingGraphRelationReplacement = (
   if (replacement.source.graph !== replacement.graph) {
     return Result.fail("source_graph_mismatch")
   }
+
   if (
     makeDocumentKey({
       graph: replacement.source.graph,
@@ -176,19 +177,23 @@ export const planOutgoingGraphRelationReplacement = (
   const relationIds = new Set<string>()
   const identities = new Set<string>()
   const edges: Array<PlannedOutgoingGraphRelation> = []
+
   for (const relation of replacement.relations) {
     if (relationIds.has(relation.id)) {
       return Result.fail("duplicate_relation")
     }
+
     relationIds.add(relation.id)
 
     for (const target of relation.targets) {
       if (target.reference.graph !== replacement.graph) {
         return Result.fail("target_graph_mismatch")
       }
+
       if (target.reference.kind !== relation.targetDocumentKind) {
         return Result.fail("target_kind_mismatch")
       }
+
       if (
         makeDocumentKey({
           graph: target.reference.graph,
@@ -203,9 +208,11 @@ export const planOutgoingGraphRelationReplacement = (
         relation: relation.id,
         targetDocumentKey: target.documentKey,
       })
+
       if (identities.has(identity)) {
         return Result.fail("duplicate_edge")
       }
+
       identities.add(identity)
       edges.push({
         relation: relation.id,
@@ -252,10 +259,12 @@ export const projectOutgoingGraphRelationsForInstance = (
     const outgoing = Object.entries(input.relations).filter(
       ([, relation]) => relation.from === input.documentKind,
     )
+
     const projected = yield* Effect.forEach(
       outgoing,
       ([relationId, relation]) => {
         const targetDefinition = input.documents[relation.to]
+
         if (targetDefinition === undefined) {
           return Effect.die(
             new Error(
@@ -269,6 +278,7 @@ export const projectOutgoingGraphRelationsForInstance = (
         const select = relation.select as (
           source: typeof sourceValue,
         ) => ReadonlyArray<unknown>
+
         return Effect.sync(() => select(sourceValue)).pipe(
           Effect.flatMap((targets) =>
             Schema.decodeEffect(
@@ -298,6 +308,7 @@ export const projectOutgoingGraphRelationsForInstance = (
                     documentKind: relation.to,
                     encodedId: encodedTargetId,
                   })
+
                   return {
                     documentKey,
                     reference: {
@@ -314,6 +325,7 @@ export const projectOutgoingGraphRelationsForInstance = (
             const keys = new Set(
               targets.map((target) => target.documentKey),
             )
+
             if (keys.size !== targets.length) {
               return Effect.fail(
                 new InvalidGraphRelationOutput({
@@ -355,6 +367,7 @@ export const projectOutgoingGraphRelations = (
 > =>
   Effect.gen(function*() {
     const definition = input.documents[input.documentKind]
+
     if (definition === undefined) {
       return yield* Effect.die(
         new Error(
@@ -369,6 +382,7 @@ export const projectOutgoingGraphRelations = (
       definition,
       value: input.value,
     })
+
     return yield* projectOutgoingGraphRelationsForInstance({
       graph: input.graph,
       documentKind: input.documentKind,
@@ -391,11 +405,13 @@ export const countGraphRelationReplacement = (
   next: ReadonlySet<string>,
 ): GraphRelationCommit => {
   let retained = 0
+
   for (const identity of next) {
     if (previous.has(identity)) retained += 1
   }
 
   let deleted = 0
+
   for (const identity of previous) {
     if (!next.has(identity)) deleted += 1
   }

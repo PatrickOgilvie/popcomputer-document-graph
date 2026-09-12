@@ -1,12 +1,12 @@
 import { Effect } from "effect"
 import type { TextSearchPolicy } from "../document/text-search-policy.js"
-import { EmbeddingProvider } from "../indexing/embedding-provider.js"
+import type { EmbeddingProvider } from "../indexing/embedding-provider.js"
 import type { RetrievalStrategy } from "./retrieval-strategy.js"
 import type { ReciprocalRankConstant } from "./rank-fusion.js"
 import {
   InvalidSearchQuery,
-  ProjectionSearchStore,
-  ProjectionTextSearchStore,
+  type ProjectionSearchStore,
+  type ProjectionTextSearchStore,
   searchGraph,
   searchGraphHybrid,
   searchGraphHybridWithSemanticQuery,
@@ -80,9 +80,11 @@ export const compileProjectionSearchPlan = (
         }),
       })
   }
+
   if (input.textPolicy === "disabled") {
     return Effect.fail(new InvalidSearchQuery({ reason: "text_disabled" }))
   }
+
   if (input.strategy._tag === "Text") {
     return Effect.succeed({
         _tag: "Text",
@@ -96,6 +98,7 @@ export const compileProjectionSearchPlan = (
         }),
       })
   }
+
   return Effect.succeed({
         _tag: "Hybrid",
         scope: input.scope,
@@ -128,6 +131,7 @@ const executeProjectionSearchPlan = Effect.fn(
   "ProjectionSearch.execute",
 )(function*(input: ExecuteProjectionSearchInput<ProjectionSearchPlan>) {
   const plan = input.plan
+
   switch (plan._tag) {
     case "Semantic":
       return input.semanticQuery === undefined
@@ -161,6 +165,7 @@ const executeProjectionSearchPlan = Effect.fn(
         results: plan.results,
         rankConstant: plan.rankConstant,
       }
+
       return input.semanticQuery === undefined
         ? yield* searchGraphHybrid(hybrid)
         : yield* searchGraphHybridWithSemanticQuery({

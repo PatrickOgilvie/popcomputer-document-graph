@@ -114,9 +114,13 @@ export interface SearchStoreConformanceFixture {
 }
 
 const GraphId = "@popcomputer/document-graph/conformance"
+
 const ProjectionId = "evidence"
+
 const ProjectionVersion = "v1"
+
 const CandidateLimit = Schema.decodeSync(SearchResultCountSchema)(10)
+
 const ScopedCandidateLimit = Schema.decodeSync(SearchResultCountSchema)(1)
 
 const semanticProfile = defineEmbeddingProfile({
@@ -133,6 +137,7 @@ const parseEnabledTextPolicy = (): Exclude<
     language: "simple",
     weights: { context: 0, label: 0, content: 1 },
   })
+
   if (policy === "disabled") {
     throw new Error("The conformance text policy must remain enabled")
   }
@@ -151,6 +156,7 @@ const makeScope = (
   ])
 
 const broadScope = makeScope({})
+
 const scopedScope = makeScope({
   include: ["Included"],
   exclude: ["Excluded"],
@@ -175,9 +181,11 @@ const makeReplacement = (input: {
   const documentKey = Schema.decodeSync(DocumentKeySchema)(
     input.identity.repeat(64),
   )
+
   const chunkId = Schema.decodeSync(ChunkIdSchema)(
     input.chunkIdentity.repeat(64),
   )
+
   const contentHash = Schema.decodeSync(ContentHashSchema)(
     input.contentIdentity.repeat(64),
   )
@@ -229,6 +237,7 @@ const tieFirst = makeReplacement({
   visibility: "public",
   vector: [0.8, 0.2],
 })
+
 const tieSecond = makeReplacement({
   identity: "2",
   chunkIdentity: "b",
@@ -240,6 +249,7 @@ const tieSecond = makeReplacement({
   visibility: "public",
   vector: [0.8, 0.2],
 })
+
 const excludedHighScore = makeReplacement({
   identity: "3",
   chunkIdentity: "c",
@@ -251,6 +261,7 @@ const excludedHighScore = makeReplacement({
   visibility: "private",
   vector: [1, 0],
 })
+
 const zeroWeightedContextOnly = makeReplacement({
   identity: "7",
   chunkIdentity: "d",
@@ -269,6 +280,7 @@ const candidateFrom = (
   score: number,
 ): CandidateFields => {
   const chunk = replacement.chunks[0]
+
   return {
     score,
     chunkId: chunk.chunkId,
@@ -287,6 +299,7 @@ const candidateFrom = (
 }
 
 const tieSemanticScore = 0.8 / Math.sqrt(0.8 ** 2 + 0.2 ** 2)
+
 const zeroWeightedSemanticScore =
   0.2 / Math.sqrt(0.2 ** 2 + 0.8 ** 2)
 
@@ -299,6 +312,7 @@ export const makeSearchStoreConformanceFixture =
       candidateFrom(tieSecond, tieSemanticScore),
       candidateFrom(zeroWeightedContextOnly, zeroWeightedSemanticScore),
     ] as const
+
     const expectedText = [
       candidateFrom(excludedHighScore, 3),
       candidateFrom(tieFirst, 1),
@@ -370,6 +384,7 @@ const sameCandidateOrder = (
   left.length === right.length &&
   left.every((candidate, index) => {
     const expected = right[index]
+
     return (
       expected !== undefined &&
       sameCandidateIdentity(candidate, expected)
@@ -395,10 +410,12 @@ const verifyCandidates = (
 
   const seen = new Set<string>()
   let previous: CandidateFields | undefined
+
   for (const candidate of candidates) {
     if (seen.has(candidate.chunkId)) {
       return Effect.fail(conformanceViolation(channel, "unique_chunks"))
     }
+
     seen.add(candidate.chunkId)
 
     if (
@@ -428,6 +445,7 @@ const verifyCandidates = (
     ) {
       return Effect.fail(conformanceViolation(channel, "stable_ties"))
     }
+
     previous = candidate
   }
 
@@ -445,6 +463,7 @@ const seedFixture = (
 ) =>
   Effect.gen(function*() {
     const store = yield* ProjectionIndexStore
+
     for (const replacement of fixture.replacements) {
       yield* store.deleteRevision(replacement.key)
       yield* store.replaceRevision(replacement)
@@ -477,6 +496,7 @@ export const verifySemanticSearchStoreConformance = () =>
     const scoped = yield* store.searchCandidates(
       fixture.scopedSemanticRequest,
     )
+
     yield* verifyCandidates(
       "semantic",
       scoped,
@@ -492,6 +512,7 @@ export const verifySemanticSearchStoreConformance = () =>
       ...fixture.semanticRequest,
       candidates: Schema.decodeSync(SearchResultCountSchema)(2),
     })
+
     yield* verifyCandidates(
       "semantic",
       bounded,
@@ -506,13 +527,13 @@ export const verifySemanticSearchStoreConformance = () =>
       fixture.expectedSemantic,
       fixture.semanticRequest,
     )
+
     const repeated = yield* store.searchCandidates(
       fixture.semanticRequest,
     )
+
     if (!sameCandidateResults(first, repeated)) {
-      return yield* Effect.fail(
-        conformanceViolation("semantic", "repeatability"),
-      )
+      return yield* conformanceViolation("semantic", "repeatability")
     }
 
     return {
@@ -531,6 +552,7 @@ export const verifyTextSearchStoreConformance = () =>
     const scoped = yield* store.searchTextCandidates(
       fixture.scopedTextRequest,
     )
+
     yield* verifyCandidates(
       "text",
       scoped,
@@ -546,6 +568,7 @@ export const verifyTextSearchStoreConformance = () =>
       ...fixture.textRequest,
       candidates: Schema.decodeSync(SearchResultCountSchema)(2),
     }
+
     const bounded = yield* store.searchTextCandidates(boundedRequest)
     yield* verifyCandidates(
       "text",
@@ -561,13 +584,13 @@ export const verifyTextSearchStoreConformance = () =>
       fixture.expectedText,
       fixture.textRequest,
     )
+
     const repeated = yield* store.searchTextCandidates(
       fixture.textRequest,
     )
+
     if (!sameCandidateResults(first, repeated)) {
-      return yield* Effect.fail(
-        conformanceViolation("text", "repeatability"),
-      )
+      return yield* conformanceViolation("text", "repeatability")
     }
 
     return {
@@ -603,8 +626,10 @@ export const verifyDocumentGraphStorageConformance = () =>
   Effect.gen(function*() {
     const projectionIndex =
       yield* verifyProjectionIndexStoreConformance()
+
     const graphTopology =
       yield* verifyGraphTopologyStoreConformance()
+
     const retrieval = yield* verifySearchStoreConformance()
 
     return { projectionIndex, graphTopology, retrieval }

@@ -29,6 +29,7 @@ import { inMemoryDocumentGraph } from "../src/in-memory.js"
 const InsightId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("InsightId"),
 )
+
 const Insight = Schema.Struct({
   id: InsightId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -53,6 +54,7 @@ const graph = defineDocumentGraph({
   id: "atomic-publication",
   documents: { Insight: InsightDocument },
 })
+
 const InsightContent = graph.document("Insight").projection("insight-content")
 
 const profile = defineEmbeddingProfile({
@@ -80,6 +82,7 @@ const freshStorage: Effect.Effect<DocumentGraphStorageService> =
     const topology = yield* GraphTopologyStore
     const semantic = yield* ProjectionSearchStore
     const text = yield* ProjectionTextSearchStore
+
     return { ...projection, ...semantic, ...text, ...topology }
   }).pipe(Effect.provide(inMemoryDocumentGraph()))
 

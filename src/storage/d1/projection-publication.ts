@@ -108,9 +108,13 @@ const MutationOutcomeRowSchema = Schema.Struct({
 })
 
 type HeadRow = typeof HeadRowSchema.Encoded
+
 type RevisionRow = typeof RevisionRowSchema.Encoded
+
 type BegunHeadRow = typeof BegunHeadRowSchema.Encoded
+
 type StaleRow = typeof StaleRowSchema.Encoded
+
 type MutationDigestRow = typeof MutationDigestRowSchema.Encoded
 
 /** D1 settings for durable Turbopuffer publication coordination. */
@@ -205,6 +209,7 @@ const activeFromRow = (
       if (row.active_token === null) {
         throw new Error("D1 returned a revision head without an active token")
       }
+
       return {
         _tag: "Revision",
         token: row.active_token,
@@ -221,6 +226,7 @@ const pendingFromRow = (
   const generation = row.pending_generation
   const operation = row.pending_operation
   const slotHighWater = row.pending_slot_high_water
+
   const fields = [
     mutationId,
     payloadDigest,
@@ -229,7 +235,9 @@ const pendingFromRow = (
     operation,
     slotHighWater,
   ]
+
   if (fields.every((field) => field === null)) return Option.none()
+
   if (
     mutationId === null || payloadDigest === null ||
     publicationId === null || generation === null ||
@@ -237,6 +245,7 @@ const pendingFromRow = (
   ) {
     throw new Error("D1 returned an incomplete pending publication")
   }
+
   return Option.some({
     mutationId: Schema.decodeSync(ProjectionMutationIdSchema)(
       mutationId,
@@ -305,6 +314,7 @@ const mutationValues = (intent: ProjectionPublicationIntent, now: number) => {
       now,
     ] as const
   }
+
   return [
     intent.mutationId,
     intent.key.documentKey,
@@ -361,6 +371,7 @@ const stageChunksStatement = (
         contentHash: chunk.contentHash,
       }))
     : []
+
   return database.prepare(
     `INSERT INTO document_graph_projection_mutation_chunks
        (mutation_id, ordinal, chunk_id, content_hash)
@@ -452,6 +463,7 @@ const beginHeadStatement = (input: {
   const expected = Option.getOrNull(input.intent.expectedToken)
   const desiredHighWater = input.intent.slotHighWater
   const operation = input.intent._tag === "Replace" ? "replace" : "delete"
+
   // Expiration is deliberately absent from the UPSERT guard. D1 cannot
   // atomically fence an already-running external TP write, so only an empty
   // pending slot or the exact prepared mutation may retain publication
@@ -659,11 +671,15 @@ const makeCoordinator = (
       "indexGeneration must contain between 1 and 256 characters",
     )
   }
+
   const leaseMilliseconds = config.publicationLeaseMilliseconds ?? 60_000
+
   if (!Number.isInteger(leaseMilliseconds) || leaseMilliseconds < 1_000) {
     throw new Error("publicationLeaseMilliseconds must be an integer >= 1000")
   }
+
   const retainedPublicationHistory = config.retainedPublicationHistory ?? 32
+
   if (
     !Number.isSafeInteger(retainedPublicationHistory) ||
     retainedPublicationHistory < 1 || retainedPublicationHistory > 1_000
@@ -702,14 +718,18 @@ const makeCoordinator = (
       ).bind(requestedKeysJson(keys), config.indexGeneration).all<HeadRow & {
         readonly request_ordinal: number
       }>()
+
       const byOrdinal = new Map<number, ProjectionPublicationHead>()
+
       for (const unknownRow of result.results) {
         const { request_ordinal: unknownOrdinal, ...unknownHead } = unknownRow
+
         const requestOrdinal = decodeRow(
           PositiveIntegerSchema,
           unknownOrdinal,
           "head ordinal",
         )
+
         try {
           byOrdinal.set(
             requestOrdinal,
@@ -721,8 +741,10 @@ const makeCoordinator = (
           })
         }
       }
+
       return keys.map((key, ordinal) => {
         const head = byOrdinal.get(ordinal)
+
         return {
           key,
           head: head === undefined ? Option.none() : Option.some(head),
@@ -757,34 +779,45 @@ const makeCoordinator = (
            ON chunk.mutation_id = mutation.mutation_id
          ORDER BY requested.request_ordinal, chunk.ordinal`,
       ).bind(requestedKeysJson(keys), config.indexGeneration).all<RevisionRow>()
+
       const grouped = new Map<number, Array<typeof RevisionRowSchema.Type>>()
+
       for (const unknownRow of result.results) {
         const row = decodeRow(RevisionRowSchema, unknownRow, "revision")
         const group = grouped.get(row.request_ordinal) ?? []
         group.push(row)
         grouped.set(row.request_ordinal, group)
       }
+
       return keys.map((key, ordinal) => {
         const rows = grouped.get(ordinal)
+
         if (rows === undefined || rows.length === 0) {
           return { key, revision: Option.none() }
         }
+
         const first = rows[0]
+
         if (first === undefined || first.chunk_id === null ||
           first.content_hash === null || first.ordinal === null) {
           throw new Error("D1 returned an incomplete active revision")
         }
+
         const chunks: Array<IndexedChunkSummary> = rows.map((row) => {
           if (row.chunk_id === null || row.content_hash === null ||
             row.ordinal === null) {
             throw new Error("D1 returned an incomplete active chunk")
           }
+
           return { chunkId: row.chunk_id, contentHash: row.content_hash }
         })
+
         const [firstChunk, ...remainingChunks] = chunks
+
         if (firstChunk === undefined) {
           throw new Error("D1 returned an active revision without chunks")
         }
+
         const snapshot: IndexedRevisionSnapshot = {
           token: first.active_token,
           revisionHash: first.revision_hash,
@@ -795,6 +828,7 @@ const makeCoordinator = (
           },
           chunks: [firstChunk, ...remainingChunks],
         }
+
         return { key, revision: Option.some(snapshot) }
       })
     })
@@ -807,8 +841,10 @@ const makeCoordinator = (
          FROM document_graph_projection_mutations
          WHERE mutation_id = ? AND payload_digest = ?`,
       ).bind(intent.mutationId, intent.payloadDigest).first()
+
       if (unknownRow === null) return Option.none<ProjectionPublicationOutcome>()
       const row = decodeRow(MutationOutcomeRowSchema, unknownRow, "committed outcome")
+
       if (row.operation === "delete" && intent._tag === "Delete") {
         return Option.some<ProjectionPublicationOutcome>({
           _tag: "Deleted",
@@ -818,9 +854,11 @@ const makeCoordinator = (
           },
         })
       }
+
       if (row.operation !== "replace" || intent._tag !== "Replace" || row.next_token === null) {
         throw new Error("D1 returned an inconsistent committed outcome")
       }
+
       return Option.some<ProjectionPublicationOutcome>({
         _tag: "Replaced",
         commit: {
@@ -830,12 +868,12 @@ const makeCoordinator = (
           deleted: row.commit_deleted,
         },
       })
-    }).pipe(Effect.flatMap((outcome) => Option.isSome(outcome)
-      ? Effect.succeed(outcome.value)
-      : Effect.fail(new ProjectionIndexConflict({
-          documentKey: intent.key.documentKey,
-          projection: intent.key.projection,
-        }))))
+    }).pipe(
+      Effect.flatMap(Effect.fromOption(() => new ProjectionIndexConflict({
+        documentKey: intent.key.documentKey,
+        projection: intent.key.projection,
+      }))),
+    )
 
   const beginPublication: ProjectionPublicationCoordinatorService[
     "beginPublication"
@@ -844,32 +882,35 @@ const makeCoordinator = (
       intent._tag === "Replace" &&
       intent.requiredSlotHighWater > intent.slotHighWater
     ) {
-      return yield* Effect.fail(coordinatorFailure(
+      return yield* coordinatorFailure(
         "begin_publication",
         "The planned slot closure does not cover every required slot",
         "invalid_stored_state",
-      ))
+      )
     }
+
     if (intent.slotHighWater > intent.maximumSlotHighWater) {
-      return yield* Effect.fail(coordinatorFailure(
+      return yield* coordinatorFailure(
         "begin_publication",
         "The planned slot high-water exceeds the provider closure bound",
         "capacity_exceeded",
-      ))
+      )
     }
+
     if (
       !Number.isSafeInteger(intent.slotHighWater) ||
       intent.slotHighWater < 0
     ) {
-      return yield* Effect.fail(coordinatorFailure(
+      return yield* coordinatorFailure(
         "begin_publication",
         "The planned slot high-water is invalid",
         "invalid_stored_state",
-      ))
+      )
     }
 
     const [lookup] = yield* loadHeads([intent.key])
     const head = lookup?.head ?? Option.none()
+
     if (Option.isSome(head)) {
       if (sameActiveIntent(head.value, intent)) {
         return {
@@ -877,6 +918,7 @@ const makeCoordinator = (
           outcome: yield* loadCommittedOutcome(intent),
         } as const
       }
+
       if (intent._tag === "Delete" &&
         head.value.active._tag === "Deleted" &&
         Option.isNone(head.value.pending)) {
@@ -888,8 +930,10 @@ const makeCoordinator = (
           },
         } as const
       }
+
       if (samePendingIntent(head.value, intent)) {
         const pending = Option.getOrThrow(head.value.pending)
+
         return {
           _tag: "Publish",
           lease: {
@@ -900,22 +944,25 @@ const makeCoordinator = (
           },
         } as const
       }
+
       if (
         Option.isNone(head.value.pending) &&
         activeMatchesExpectedToken(head.value, intent) &&
         head.value.slotHighWater > intent.slotHighWater
       ) {
-        return yield* Effect.fail(stalePlan(
+        return yield* stalePlan(
           intent,
           head.value.slotHighWater,
-        ))
+        )
       }
     }
 
     const now = Date.now()
-    const publicationId = Schema.decodeSync(ProjectionPublicationIdSchema)(
+
+    const publicationId = ProjectionPublicationIdSchema.make(
       crypto.randomUUID(),
     )
+
     const statements = [
       stageMutationStatement(config.database, intent, now),
       stageChunksStatement(config.database, intent),
@@ -936,12 +983,15 @@ const makeCoordinator = (
       }),
       cleanupUnreferencedMutationStatement(config.database, intent),
     ]
+
     const results = yield* d1Effect(
       "begin_publication",
       () => config.database.batch<BegunHeadRow>(statements),
     )
+
     const begunResult = results[2]
     const begunUnknown = begunResult?.results[0]
+
     if (begunUnknown !== undefined) {
       const begun = yield* decodeCoordinatorRow(
         BegunHeadRowSchema,
@@ -949,6 +999,7 @@ const makeCoordinator = (
         "begun head",
         "begin_publication",
       )
+
       yield* d1Effect("begin_publication", () =>
         config.database.prepare(
           `UPDATE document_graph_projection_publications
@@ -963,6 +1014,7 @@ const makeCoordinator = (
           intent.key.projection,
           begun.pending_generation,
         ).run().then(() => undefined))
+
       return {
         _tag: "Publish",
         lease: leaseFromRow(intent, begun),
@@ -975,6 +1027,7 @@ const makeCoordinator = (
          FROM document_graph_projection_mutations
          WHERE mutation_id = ?`,
       ).bind(intent.mutationId).first<MutationDigestRow>())
+
     const persistedDigest = digest === null
       ? null
       : yield* decodeCoordinatorRow(
@@ -983,25 +1036,29 @@ const makeCoordinator = (
           "mutation digest",
           "begin_publication",
         )
+
     if (persistedDigest !== null &&
       persistedDigest.payload_digest !== intent.payloadDigest) {
-      return yield* Effect.fail(coordinatorFailure(
+      return yield* coordinatorFailure(
         "begin_publication",
         "Mutation ID was reused with a different payload",
         "invalid_stored_state",
-      ))
+      )
     }
 
     const [afterLookup] = yield* loadHeads([intent.key])
     const after = afterLookup?.head ?? Option.none()
+
     if (Option.isSome(after) && sameActiveIntent(after.value, intent)) {
       return {
         _tag: "AlreadyCommitted",
         outcome: yield* loadCommittedOutcome(intent),
       } as const
     }
+
     if (Option.isSome(after) && samePendingIntent(after.value, intent)) {
       const pending = Option.getOrThrow(after.value.pending)
+
       return {
         _tag: "Publish",
         lease: {
@@ -1012,30 +1069,34 @@ const makeCoordinator = (
         },
       } as const
     }
+
     if (Option.isSome(after) && Option.isSome(after.value.pending)) {
-      return yield* Effect.fail(coordinatorFailure(
+      return yield* coordinatorFailure(
         "begin_publication",
         "A different publication is already pending",
         "publication_in_progress",
-      ))
+      )
     }
+
     if (Option.isSome(after) &&
       activeMatchesExpectedToken(after.value, intent) &&
       after.value.slotHighWater > intent.slotHighWater) {
-      return yield* Effect.fail(stalePlan(intent, after.value.slotHighWater))
+      return yield* stalePlan(intent, after.value.slotHighWater)
     }
+
     if (Option.isSome(after) &&
       after.value.slotHighWater > intent.maximumSlotHighWater) {
-      return yield* Effect.fail(coordinatorFailure(
+      return yield* coordinatorFailure(
         "begin_publication",
         "The inherited slot high-water exceeds the provider closure bound",
         "capacity_exceeded",
-      ))
+      )
     }
-    return yield* Effect.fail(new ProjectionIndexConflict({
+
+    return yield* new ProjectionIndexConflict({
       documentKey: intent.key.documentKey,
       projection: intent.key.projection,
-    }))
+    })
   })
 
   const finalizePublication: ProjectionPublicationCoordinatorService[
@@ -1044,10 +1105,13 @@ const makeCoordinator = (
     const activeStatus = lease.intent._tag === "Replace"
       ? "revision"
       : "deleted"
+
     const activeToken = lease.intent._tag === "Replace"
       ? lease.intent.snapshot.token
       : null
+
     const now = Date.now()
+
     const results = yield* d1Effect("finalize_publication", () =>
       config.database.batch([
         config.database.prepare(
@@ -1104,17 +1168,20 @@ const makeCoordinator = (
         }),
         cleanupProjectionMutationsStatement(config.database, lease.intent.key),
       ]))
+
     if ((results[0]?.results.length ?? 0) > 0) return outcomeFor(lease.intent)
 
     const [lookup] = yield* loadHeads([lease.intent.key])
     const head = lookup?.head ?? Option.none()
+
     if (Option.isSome(head) && sameActiveIntent(head.value, lease.intent)) {
       return outcomeFor(lease.intent)
     }
-    return yield* Effect.fail(new ProjectionPublicationSuperseded({
+
+    return yield* new ProjectionPublicationSuperseded({
       documentKey: lease.intent.key.documentKey,
       projection: lease.intent.key.projection,
-    }))
+    })
   })
 
   const supersedePublication: ProjectionPublicationCoordinatorService[
@@ -1168,6 +1235,7 @@ const makeCoordinator = (
          AND head.active_status = 'revision' AND mutation.graph_id = ?
        ORDER BY head.document_key, head.projection_id`,
     ).bind(config.indexGeneration, input.graph).all<StaleRow>()
+
     return result.results
       .map((row) => decodeRow(StaleRowSchema, row, "stale revision"))
       .filter((row) => !input.registered.some((registered) =>

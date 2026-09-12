@@ -21,6 +21,7 @@ describe("PostgresDocumentGraphConfig structural clients", () => {
     const config: PostgresDocumentGraphConfig = {
       transaction: makeMinimalClient(),
     }
+
     expect(config.schema).toBeUndefined()
   })
 
@@ -29,6 +30,7 @@ describe("PostgresDocumentGraphConfig structural clients", () => {
       query: (text: string, values?: ReadonlyArray<unknown>) =>
         Promise.resolve({ text, values, rows: [] }),
     }
+
     expect(
       configWithTransaction(postgresTransactionClient(pgLike)).pool,
     ).toBeUndefined()
@@ -38,16 +40,20 @@ describe("PostgresDocumentGraphConfig structural clients", () => {
     const rawQueryClient = {
       query: () => Promise.resolve({ rows: [] }),
     }
+
     const rejectRawQueryClient = () => {
       const invalid: PostgresDocumentGraphConfig = {
         // @ts-expect-error Structural clients must explicitly opt in.
         transaction: rawQueryClient,
       }
+
       return invalid
     }
+
     const rejectPool = (pool: Pool) => {
       // @ts-expect-error Pool queries are not pinned to one transaction.
       const invalid: PostgresDocumentGraphConfig = { transaction: pool }
+
       return invalid
     }
 

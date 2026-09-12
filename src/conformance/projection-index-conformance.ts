@@ -56,8 +56,11 @@ export interface ProjectionIndexStoreConformanceFixture {
 }
 
 const GraphId = "@popcomputer/document-graph/conformance/index"
+
 const DocumentKind = "Included"
+
 const ProjectionId = "evidence"
+
 const ProjectionVersion = "v1"
 
 const profile = defineEmbeddingProfile({
@@ -67,11 +70,17 @@ const profile = defineEmbeddingProfile({
 })
 
 const documentKey = Schema.decodeSync(DocumentKeySchema)("a".repeat(64))
+
 const firstChunkId = Schema.decodeSync(ChunkIdSchema)("b".repeat(64))
+
 const secondChunkId = Schema.decodeSync(ChunkIdSchema)("c".repeat(64))
+
 const retiredChunkId = Schema.decodeSync(ChunkIdSchema)("d".repeat(64))
+
 const firstContentHash = Schema.decodeSync(ContentHashSchema)("e".repeat(64))
+
 const secondContentHash = Schema.decodeSync(ContentHashSchema)("f".repeat(64))
+
 const retiredContentHash = Schema.decodeSync(ContentHashSchema)("1".repeat(64))
 
 const encodedTarget = {
@@ -121,12 +130,15 @@ const initialChunks: readonly [
 const initialRevisionHash = Schema.decodeSync(
   ProjectionRevisionHashSchema,
 )("2".repeat(64))
+
 const metadataRevisionHash = Schema.decodeSync(
   ProjectionRevisionHashSchema,
 )("3".repeat(64))
+
 const reducedRevisionHash = Schema.decodeSync(
   ProjectionRevisionHashSchema,
 )("4".repeat(64))
+
 const retiredRevisionHash = Schema.decodeSync(
   ProjectionRevisionHashSchema,
 )("5".repeat(64))
@@ -148,6 +160,7 @@ export const makeProjectionIndexStoreConformanceFixture =
         { contentHash: secondContentHash, vector: [0, 1] },
       ],
     }
+
     const metadataOnly: ReplaceProjectedRevision = {
       ...initial,
       revisionHash: metadataRevisionHash,
@@ -160,11 +173,13 @@ export const makeProjectionIndexStoreConformanceFixture =
       ],
       embeddings: [],
     }
+
     const reduced: ReplaceProjectedRevision = {
       ...metadataOnly,
       revisionHash: reducedRevisionHash,
       chunks: [metadataOnly.chunks[0]],
     }
+
     const retired: ReplaceProjectedRevision = {
       key: { documentKey, projection: "retired" },
       expectedToken: Option.none(),
@@ -239,6 +254,7 @@ const snapshotMatches = (
   const stored = new Map(
     snapshot.chunks.map((chunk) => [chunk.chunkId, chunk.contentHash]),
   )
+
   return (
     stored.size === snapshot.chunks.length &&
     replacement.chunks.every(
@@ -265,9 +281,11 @@ const sameSnapshotState = (
   const leftInventory = new Map(
     left.chunks.map((chunk) => [chunk.chunkId, chunk.contentHash]),
   )
+
   const rightInventory = new Map(
     right.chunks.map((chunk) => [chunk.chunkId, chunk.contentHash]),
   )
+
   return (
     leftInventory.size === left.chunks.length &&
     rightInventory.size === right.chunks.length &&
@@ -284,9 +302,11 @@ const loadRequiredSnapshot = (
   Effect.gen(function*() {
     const store = yield* ProjectionIndexStore
     const [loaded] = yield* store.loadRevisions([key])
+
     if (loaded === undefined || Option.isNone(loaded.revision)) {
-      return yield* Effect.fail(violation(law))
+      return yield* violation(law)
     }
+
     return loaded.revision.value
   })
 
@@ -298,17 +318,19 @@ const verifyRejectedWithoutMutation = (
   Effect.gen(function*() {
     const store = yield* ProjectionIndexStore
     const rejected = yield* store.replaceRevision(replacement).pipe(Effect.result)
+
     if (
       !Result.isFailure(rejected) ||
       rejected.failure._tag !== "ProjectionIndexStoreFailed" ||
       rejected.failure.reason !== "invalid_stored_state"
     ) {
-      return yield* Effect.fail(violation(law))
+      return yield* violation(law)
     }
 
     const after = yield* loadRequiredSnapshot(replacement.key, law)
+
     if (!sameSnapshotState(after, before)) {
-      return yield* Effect.fail(violation(law))
+      return yield* violation(law)
     }
   })
 
@@ -334,6 +356,7 @@ export const verifyProjectionIndexStoreConformance = () =>
     yield* store.deleteRevision(fixture.retired.key)
 
     const initialCommit = yield* store.replaceRevision(fixture.initial)
+
     if (
       !commitMatches(initialCommit, {
         inserted: 2,
@@ -341,22 +364,25 @@ export const verifyProjectionIndexStoreConformance = () =>
         deleted: 0,
       })
     ) {
-      return yield* Effect.fail(violation("complete_replacement"))
+      return yield* violation("complete_replacement")
     }
+
     const initialSnapshot = yield* loadRequiredSnapshot(
       fixture.initial.key,
       "snapshot_inventory",
     )
+
     if (
       initialSnapshot.token !== initialCommit.token ||
       !snapshotMatches(initialSnapshot, fixture.initial)
     ) {
-      return yield* Effect.fail(violation("snapshot_inventory"))
+      return yield* violation("snapshot_inventory")
     }
 
     const metadataCommit = yield* store.replaceRevision(
       withExpectedToken(fixture.metadataOnly, initialSnapshot.token),
     )
+
     if (
       !commitMatches(metadataCommit, {
         inserted: 0,
@@ -364,14 +390,16 @@ export const verifyProjectionIndexStoreConformance = () =>
         deleted: 0,
       })
     ) {
-      return yield* Effect.fail(violation("content_hash_reuse"))
+      return yield* violation("content_hash_reuse")
     }
+
     const metadataSnapshot = yield* loadRequiredSnapshot(
       fixture.metadataOnly.key,
       "content_hash_reuse",
     )
+
     if (!snapshotMatches(metadataSnapshot, fixture.metadataOnly)) {
-      return yield* Effect.fail(violation("content_hash_reuse"))
+      return yield* violation("content_hash_reuse")
     }
 
     const staleWrite = yield* store
@@ -379,21 +407,24 @@ export const verifyProjectionIndexStoreConformance = () =>
         withExpectedToken(fixture.reduced, initialSnapshot.token),
       )
       .pipe(Effect.result)
+
     if (
       !Result.isFailure(staleWrite) ||
-      !(staleWrite.failure instanceof ProjectionIndexConflict)
+      !(Schema.is(ProjectionIndexConflict)(staleWrite.failure))
     ) {
-      return yield* Effect.fail(violation("optimistic_conflict"))
+      return yield* violation("optimistic_conflict")
     }
+
     const afterConflict = yield* loadRequiredSnapshot(
       fixture.metadataOnly.key,
       "optimistic_conflict",
     )
+
     if (
       afterConflict.token !== metadataSnapshot.token ||
       !snapshotMatches(afterConflict, fixture.metadataOnly)
     ) {
-      return yield* Effect.fail(violation("optimistic_conflict"))
+      return yield* violation("optimistic_conflict")
     }
 
     yield* verifyRejectedWithoutMutation(
@@ -412,6 +443,7 @@ export const verifyProjectionIndexStoreConformance = () =>
     const reducedCommit = yield* store.replaceRevision(
       withExpectedToken(fixture.reduced, metadataSnapshot.token),
     )
+
     if (
       !commitMatches(reducedCommit, {
         inserted: 0,
@@ -419,19 +451,22 @@ export const verifyProjectionIndexStoreConformance = () =>
         deleted: 1,
       })
     ) {
-      return yield* Effect.fail(violation("stale_chunk_deletion"))
+      return yield* violation("stale_chunk_deletion")
     }
+
     const reducedSnapshot = yield* loadRequiredSnapshot(
       fixture.reduced.key,
       "stale_chunk_deletion",
     )
+
     if (!snapshotMatches(reducedSnapshot, fixture.reduced)) {
-      return yield* Effect.fail(violation("stale_chunk_deletion"))
+      return yield* violation("stale_chunk_deletion")
     }
 
     const removed = yield* store.deleteRevision(fixture.reduced.key)
     const removedAgain = yield* store.deleteRevision(fixture.reduced.key)
     const [afterDelete] = yield* store.loadRevisions([fixture.reduced.key])
+
     if (
       removed.deletedRevisions !== 1 ||
       removed.deletedChunks !== 1 ||
@@ -439,29 +474,34 @@ export const verifyProjectionIndexStoreConformance = () =>
       removedAgain.deletedChunks !== 0 ||
       afterDelete === undefined || Option.isSome(afterDelete.revision)
     ) {
-      return yield* Effect.fail(violation("idempotent_deletion"))
+      return yield* violation("idempotent_deletion")
     }
 
     yield* store.replaceRevision(fixture.initial)
     yield* store.replaceRevision(fixture.retired)
+
     const pruned = yield* store.pruneGraph({
       graph: GraphId,
       registered: [
         { documentKind: DocumentKind, projection: ProjectionId },
       ],
     })
+
     const batch = yield* store.loadRevisions([
       fixture.retired.key,
       fixture.initial.key,
       fixture.initial.key,
     ])
+
     const [retiredAfterPrune, activeAfterPrune, duplicateActive] = batch
+
     if (
       pruned.deletedRevisions !== 1 ||
       pruned.deletedChunks !== 1
     ) {
-      return yield* Effect.fail(violation("schema_pruning"))
+      return yield* violation("schema_pruning")
     }
+
     if (
       retiredAfterPrune === undefined ||
       activeAfterPrune === undefined ||
@@ -475,12 +515,13 @@ export const verifyProjectionIndexStoreConformance = () =>
       activeAfterPrune.key !== fixture.initial.key ||
       duplicateActive.key !== fixture.initial.key
     ) {
-      return yield* Effect.fail(violation("ordered_batch_lookup"))
+      return yield* violation("ordered_batch_lookup")
     }
 
     // A versioned declaration must not retain an older revision. An omitted
     // version remains a wildcard independently of other catalog entries.
     yield* store.replaceRevision(fixture.retired)
+
     const versionPrune = yield* store.pruneGraph({
       graph: GraphId,
       registered: [
@@ -492,18 +533,21 @@ export const verifyProjectionIndexStoreConformance = () =>
         { documentKind: DocumentKind, projection: fixture.retired.key.projection },
       ],
     })
+
     const [outdated, retained] = yield* store.loadRevisions([
       fixture.initial.key,
       fixture.retired.key,
     ])
+
     if (
       versionPrune.deletedRevisions !== 1 ||
       versionPrune.deletedChunks !== 2 ||
       outdated === undefined || Option.isSome(outdated.revision) ||
       retained === undefined || Option.isNone(retained.revision)
     ) {
-      return yield* Effect.fail(violation("schema_pruning"))
+      return yield* violation("schema_pruning")
     }
+
     yield* store.deleteRevision(fixture.retired.key)
 
     return {

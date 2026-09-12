@@ -19,6 +19,7 @@ import { inMemoryDocumentGraph } from "../src/in-memory.js"
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("CurrencyArticleId"),
 )
+
 const Article = Schema.Struct({
   id: ArticleId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -30,6 +31,7 @@ const Article = Schema.Struct({
     }),
   ),
 })
+
 const articleDocument = <const Version extends string>(version: Version) =>
   defineDocument({
     id: ArticleId,
@@ -50,17 +52,23 @@ const articleDocument = <const Version extends string>(version: Version) =>
   })
 
 const ArticleDocument = articleDocument("v1")
+
 const ArticleDocumentV2 = articleDocument("v2")
+
 const graph = defineDocumentGraph({
   id: "evidence-currency",
   documents: { Article: ArticleDocument },
 })
+
 const graphV2 = defineDocumentGraph({
   id: "evidence-currency",
   documents: { Article: ArticleDocumentV2 },
 })
+
 const ArticleNode = graph.document("Article")
+
 const ArticleContent = ArticleNode.projection("article-content")
+
 const ArticleContentV2 = graphV2
   .document("Article")
   .projection("article-content")
@@ -70,11 +78,13 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 1,
 })
+
 const profileV2 = defineEmbeddingProfile({
   id: "test:currency",
   version: "v2",
   dimensions: 1,
 })
+
 const embeddings: EmbeddingProviderService = {
   profile,
   embedDocuments: (requests) =>
@@ -86,6 +96,7 @@ const embeddings: EmbeddingProviderService = {
     ),
   embedQuery: () => Effect.succeed([1]),
 }
+
 const embeddingsV2: EmbeddingProviderService = {
   ...embeddings,
   profile: profileV2,
@@ -143,12 +154,14 @@ describe("verifyEvidenceCurrency", () => {
     const beforeReindex = await Effect.runPromise(
       verifyEvidenceCurrency([firstReference]).pipe(Effect.provide(live)),
     )
+
     expect(beforeReindex).toEqual(["Current"])
 
     const replacement = article("Replacement body text.")
     await Effect.runPromise(
       ArticleContent.index(replacement).pipe(Effect.provide(live)),
     )
+
     const secondReference = referenceOf(
       await runProjection(article("Replacement body text.")),
     )
@@ -158,6 +171,7 @@ describe("verifyEvidenceCurrency", () => {
         Effect.provide(live),
       ),
     )
+
     expect(afterReindex).toEqual(["Stale", "Current"])
   })
 
@@ -168,6 +182,7 @@ describe("verifyEvidenceCurrency", () => {
       ArticleContent.index(doomed).pipe(Effect.provide(live)),
     )
     const reference = referenceOf(await runProjection(doomed))
+
     const neverIndexed = referenceOf(
       await runProjection(otherArticle("Never indexed body.")),
     )
@@ -189,19 +204,23 @@ describe("verifyEvidenceCurrency", () => {
         { ...reference, projectionId: "no-such-projection" },
       ]).pipe(Effect.provide(live)),
     )
+
     expect(currencies).toEqual(["Missing", "Missing", "Missing"])
   })
 
   test("reports Stale when the projection version changes", async () => {
     const storage = inMemoryDocumentGraph()
+
     const liveV1 = Layer.merge(
       Layer.succeed(EmbeddingProvider, embeddings),
       storage,
     )
+
     const liveV2 = Layer.merge(
       Layer.succeed(EmbeddingProvider, embeddings),
       storage,
     )
+
     const value = article("Versioned body.")
 
     await Effect.runPromise(
@@ -215,19 +234,23 @@ describe("verifyEvidenceCurrency", () => {
     const currencies = await Effect.runPromise(
       verifyEvidenceCurrency([reference]).pipe(Effect.provide(storage)),
     )
+
     expect(currencies).toEqual(["Stale"])
   })
 
   test("keeps identical projected evidence current after re-embedding", async () => {
     const storage = inMemoryDocumentGraph()
+
     const liveV1 = Layer.merge(
       Layer.succeed(EmbeddingProvider, embeddings),
       storage,
     )
+
     const liveV2 = Layer.merge(
       Layer.succeed(EmbeddingProvider, embeddingsV2),
       storage,
     )
+
     const value = article("Re-embedded body.")
 
     await Effect.runPromise(
@@ -241,6 +264,7 @@ describe("verifyEvidenceCurrency", () => {
     const currencies = await Effect.runPromise(
       verifyEvidenceCurrency([reference]).pipe(Effect.provide(storage)),
     )
+
     expect(currencies).toEqual(["Current"])
   })
 
@@ -253,16 +277,19 @@ describe("verifyEvidenceCurrency", () => {
     const currencies = await Effect.runPromise(
       verifyEvidenceCurrency([]).pipe(Effect.provide(failingReads)),
     )
+
     expect(currencies).toEqual([])
   })
 
   test("deduplicates revision keys into one ordered batch read", async () => {
     const reference = referenceOf(await runProjection(article("Batch body.")))
     const batches: Array<ReadonlyArray<unknown>> = []
+
     const store: ProjectionIndexStoreService = {
       ...dyingStore,
       loadRevisions: (keys) => {
         batches.push(keys)
+
         return Effect.succeed(
           keys.map((key) => ({ key, revision: Option.none() })),
         )
@@ -271,7 +298,7 @@ describe("verifyEvidenceCurrency", () => {
 
     const currencies = await Effect.runPromise(
       verifyEvidenceCurrency([reference, reference]).pipe(
-        Effect.provide(Layer.succeed(ProjectionIndexStore, store)),
+        Effect.provideService(ProjectionIndexStore, store),
       ),
     )
 
@@ -282,6 +309,7 @@ describe("verifyEvidenceCurrency", () => {
 
   test("builds references from search hits", async () => {
     const reference = referenceOf(await runProjection(article("Hit body.")))
+
     const hit = {
       rank: 1,
       score: 1,

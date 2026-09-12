@@ -28,6 +28,7 @@ const candidateMatchesRequest = (
   >[0],
 ): boolean => {
   const scope = request.scope
+
   if (
     candidate.reference.graph !== scope.graph ||
     (scope.includeDocumentKinds.length > 0 &&
@@ -105,6 +106,7 @@ describe("adapter conformance", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const correct = yield* ProjectionIndexStore
+
         const broken: ProjectionIndexStoreService = {
           ...correct,
           replaceRevision: (replacement) =>
@@ -121,10 +123,12 @@ describe("adapter conformance", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe(
         "ProjectionIndexStoreConformanceViolation",
       )
+
       if (
         result.failure._tag ===
         "ProjectionIndexStoreConformanceViolation"
@@ -138,15 +142,18 @@ describe("adapter conformance", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const correct = yield* ProjectionIndexStore
+
         const broken: ProjectionIndexStoreService = {
           ...correct,
           replaceRevision: (replacement) => {
             const invalid = replacement.chunks.some(
               (chunk) => chunk.content.trim().length === 0,
             )
+
             if (!invalid) return correct.replaceRevision(replacement)
 
             const [first, ...rest] = replacement.chunks
+
             return correct
               .replaceRevision({
                 ...replacement,
@@ -177,10 +184,12 @@ describe("adapter conformance", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe(
         "ProjectionIndexStoreConformanceViolation",
       )
+
       if (
         result.failure._tag ===
         "ProjectionIndexStoreConformanceViolation"
@@ -196,6 +205,7 @@ describe("adapter conformance", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const correct = yield* GraphTopologyStore
+
         const broken: GraphTopologyStoreService = {
           ...correct,
           findRelatedNodes: (request) =>
@@ -216,10 +226,12 @@ describe("adapter conformance", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe(
         "GraphTopologyStoreConformanceViolation",
       )
+
       if (
         result.failure._tag ===
         "GraphTopologyStoreConformanceViolation"
@@ -263,6 +275,7 @@ describe("adapter conformance", () => {
 
   test("rejects an adapter that filters only after candidate limiting", async () => {
     const fixture = makeSearchStoreConformanceFixture()
+
     const brokenStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) =>
         Effect.succeed(
@@ -283,8 +296,10 @@ describe("adapter conformance", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("SearchStoreConformanceViolation")
+
       if (result.failure._tag === "SearchStoreConformanceViolation") {
         expect(result.failure.channel).toBe("text")
         expect(result.failure.law).toBe("scope_before_limit")
@@ -295,6 +310,7 @@ describe("adapter conformance", () => {
   test("rejects an adapter whose repeated result order changes", async () => {
     const fixture = makeSearchStoreConformanceFixture()
     let completeRequests = 0
+
     const unstableStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) => {
         if (request.scope.includeDocumentKinds.length > 0) {
@@ -306,6 +322,7 @@ describe("adapter conformance", () => {
         }
 
         completeRequests += 1
+
         if (completeRequests === 1) {
           return Effect.succeed(fixture.expectedText)
         }
@@ -327,8 +344,10 @@ describe("adapter conformance", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("SearchStoreConformanceViolation")
+
       if (result.failure._tag === "SearchStoreConformanceViolation") {
         expect(result.failure.channel).toBe("text")
         expect(result.failure.law).toBe("repeatability")
@@ -338,10 +357,12 @@ describe("adapter conformance", () => {
 
   test("rejects text candidates that match only zero-weighted channels", async () => {
     const fixture = makeSearchStoreConformanceFixture()
+
     const phantom = {
       ...fixture.expectedSemantic[3],
       score: 0,
     }
+
     const brokenStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) => {
         if (request.scope.includeDocumentKinds.length > 0) {
@@ -365,8 +386,10 @@ describe("adapter conformance", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("SearchStoreConformanceViolation")
+
       if (result.failure._tag === "SearchStoreConformanceViolation") {
         expect(result.failure.channel).toBe("text")
         expect(result.failure.law).toBe("positive_text_score")

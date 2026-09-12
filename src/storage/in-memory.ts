@@ -1,10 +1,9 @@
 import {
   Array as EffectArray,
   Effect,
-  Layer,
+  type Layer,
   Option,
   Result,
-  Schema,
 } from "effect"
 import type { JsonValue } from "../document/json-value.js"
 import {
@@ -18,8 +17,8 @@ import {
   documentKeyMatchesGraphSearchTarget,
   type GraphSearchScope,
   projectionMatchesGraphSearchScope,
-  ProjectionSearchStore,
-  ProjectionTextSearchStore,
+  type ProjectionSearchStore,
+  type ProjectionTextSearchStore,
 } from "../retrieval/graph-retrieval.js"
 import { evaluateMetadataFilter } from "../retrieval/metadata-filter.js"
 import {
@@ -28,7 +27,7 @@ import {
   IndexRevisionTokenSchema,
   planProjectedRevisionReplacement,
   ProjectionIndexConflict,
-  ProjectionIndexStore,
+  type ProjectionIndexStore,
   ProjectionIndexStoreFailed,
   type IndexedRevisionSnapshot,
   type ProjectedChunkRecord,
@@ -40,7 +39,7 @@ import {
   type OutgoingGraphRelationTarget,
 } from "../graph/graph-relation.js"
 import {
-  GraphTopologyStore,
+  type GraphTopologyStore,
   GraphTopologyStoreFailed,
   type StoredGraphNode,
 } from "../graph/graph-topology.js"
@@ -168,9 +167,11 @@ const cosineSimilarity = (
   let dotProduct = 0
   let leftMagnitude = 0
   let rightMagnitude = 0
+
   for (let index = 0; index < left.length; index += 1) {
     const leftValue = left[index]
     const rightValue = right[index]
+
     if (leftValue === undefined || rightValue === undefined) {
       return 0
     }
@@ -201,6 +202,7 @@ const fieldScore = (
 
   const fieldTokens = tokenize(value)
   let matches = 0
+
   for (const queryToken of queryTokens) {
     for (const fieldToken of fieldTokens) {
       if (queryToken === fieldToken) {
@@ -256,6 +258,7 @@ const collectStoredCandidates = (input: {
   ) => number | undefined
 }): ReadonlyArray<CandidateFields> => {
   const ranked: Array<StoredCandidate> = []
+
   for (const revision of input.revisions) {
     if (
       input.acceptRevision?.(revision) === false ||
@@ -283,6 +286,7 @@ const collectStoredCandidates = (input: {
       }
 
       const score = input.score(revision, chunk)
+
       if (score !== undefined) {
         ranked.push({ score, revision, chunk })
       }
@@ -309,6 +313,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
 
   const collectOrphanedReferencedNodes = (graph: string): number => {
     const connectedDocumentKeys = new Set<DocumentKey>()
+
     for (const edge of edges.values()) {
       if (edge.graph !== graph) continue
       connectedDocumentKeys.add(edge.sourceDocumentKey)
@@ -316,6 +321,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
     }
 
     let deletedReferencedNodes = 0
+
     for (const [key, node] of nodes) {
       if (
         node.graph !== graph ||
@@ -324,9 +330,11 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
       ) {
         continue
       }
+
       nodes.delete(key)
       deletedReferencedNodes += 1
     }
+
     return deletedReferencedNodes
   }
 
@@ -335,6 +343,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
       Effect.sync(() =>
         keys.map((key) => {
           const revision = revisions.get(storageKey(key))
+
           return {
             key,
             revision: revision === undefined
@@ -348,19 +357,19 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
       Effect.gen(function*() {
         const key = storageKey(replacement.key)
         const current = revisions.get(key)
+
         if (!expectedTokenMatches(current, replacement)) {
-          return yield* Effect.fail(
-            new ProjectionIndexConflict({
-              documentKey: replacement.key.documentKey,
-              projection: replacement.key.projection,
-            }),
-          )
+          return yield* new ProjectionIndexConflict({
+            documentKey: replacement.key.documentKey,
+            projection: replacement.key.projection,
+          })
         }
 
         const reusableVectors = new Map<
           ContentHash,
           ReadonlyArray<number>
         >()
+
         if (
           current !== undefined &&
           embeddingProfilesEqual(
@@ -377,13 +386,16 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
           replacement,
           reusableVectors,
         )
+
         if (Result.isFailure(plan)) {
-          return yield* Effect.fail(invalidReplacement(plan.failure))
+          return yield* invalidReplacement(plan.failure)
         }
 
         const nextChunks: Array<StoredChunk> = []
+
         for (const chunk of replacement.chunks) {
           const vector = plan.success.vectors.get(chunk.contentHash)
+
           if (vector === undefined) {
             return yield* Effect.die(
               new Error(
@@ -401,15 +413,18 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
         const previousIds = new Set(
           current?.chunks.map((chunk) => chunk.record.chunkId) ?? [],
         )
+
         const counts = countProjectedRevisionReplacement(
           previousIds,
           plan.success.chunkIds,
         )
 
         tokenSequence += 1
-        const token = Schema.decodeSync(IndexRevisionTokenSchema)(
+
+        const token = IndexRevisionTokenSchema.make(
           `memory-revision-${tokenSequence}`,
         )
+
         const snapshot: IndexedRevisionSnapshot = {
           token,
           revisionHash: replacement.revisionHash,
@@ -442,11 +457,13 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
     deleteRevision: (key) =>
       Effect.sync(() => {
         const stored = revisions.get(storageKey(key))
+
         if (stored === undefined) {
           return { deletedRevisions: 0, deletedChunks: 0 }
         }
 
         revisions.delete(storageKey(key))
+
         return {
           deletedRevisions: 1,
           deletedChunks: stored.chunks.length,
@@ -457,6 +474,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
       Effect.sync(() => {
         let deletedRevisions = 0
         let deletedChunks = 0
+
         for (const [key, revision] of revisions) {
           if (revision.encodedTarget.graph !== input.graph) {
             continue
@@ -469,6 +487,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
               (target.projectionVersion === undefined ||
                 target.projectionVersion === revision.projectionVersion),
           )
+
           if (registered) {
             continue
           }
@@ -500,6 +519,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
     searchTextCandidates: (request) =>
       Effect.sync(() => {
         const queryTokens = tokenize(request.query)
+
         return collectStoredCandidates({
           revisions: revisions.values(),
           scope: request.scope,
@@ -510,6 +530,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
               chunk.record.text,
               request.policy,
             )
+
             return score > 0 ? score : undefined
           },
         })
@@ -518,10 +539,9 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
     replaceDocumentTopology: (replacement) =>
       Effect.gen(function*() {
         const plan = planOutgoingGraphRelationReplacement(replacement)
+
         if (Result.isFailure(plan)) {
-          return yield* Effect.fail(
-            invalidTopologyStorage("replace_document", plan.failure),
-          )
+          return yield* invalidTopologyStorage("replace_document", plan.failure)
         }
 
         nodes.set(
@@ -538,11 +558,13 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
         )
 
         const next = new Map<string, StoredGraphEdge>()
+
         for (const planned of plan.success.edges) {
           const targetNodeKey = nodeKey({
             graph: replacement.graph,
             documentKey: planned.target.documentKey,
           })
+
           const existingTarget = nodes.get(targetNodeKey)
           nodes.set(targetNodeKey, {
             graph: replacement.graph,
@@ -552,6 +574,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
               ? "Materialized"
               : "Referenced",
           })
+
           const edge: StoredGraphEdge = {
             graph: replacement.graph,
             relation: planned.relation,
@@ -565,6 +588,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
             },
             targetDocumentKind: planned.targetDocumentKind,
           }
+
           next.set(edgeKey(edge), edge)
         }
 
@@ -577,9 +601,11 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
             )
             .map(([key]) => key),
         )
+
         for (const key of previousKeys) {
           edges.delete(key)
         }
+
         for (const [key, edge] of next) {
           edges.set(key, edge)
         }
@@ -596,6 +622,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
       Effect.sync(() => {
         const deletedNodes = nodes.delete(nodeKey(input)) ? 1 : 0
         let deletedRelations = 0
+
         for (const [key, edge] of edges) {
           if (
             edge.graph === input.graph &&
@@ -606,15 +633,18 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
             deletedRelations += 1
           }
         }
+
         const deletedReferencedNodes = collectOrphanedReferencedNodes(
           input.graph,
         )
+
         return { deletedNodes, deletedRelations, deletedReferencedNodes }
       }),
 
     pruneTopology: (input) =>
       Effect.sync(() => {
         let deletedRelations = 0
+
         for (const [key, edge] of edges) {
           if (edge.graph !== input.graph) {
             continue
@@ -627,20 +657,24 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
               relation.sourceDocumentKind === edge.sourceDocumentKind &&
               relation.targetDocumentKind === edge.targetDocumentKind,
           )
+
           if (!active) {
             edges.delete(key)
             deletedRelations += 1
           }
         }
+
         const deletedReferencedNodes = collectOrphanedReferencedNodes(
           input.graph,
         )
+
         return { deletedRelations, deletedReferencedNodes }
       }),
 
     listNodes: (input) =>
       Effect.sync(() => {
         const after = Option.getOrUndefined(input.after)
+
         const page = Array.from(nodes.values())
           .filter(
             (node) =>
@@ -655,9 +689,11 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
             String(left.documentKey).localeCompare(String(right.documentKey)),
           )
           .slice(0, input.limit + 1)
+
         const hasMore = page.length > input.limit
         const visible = hasMore ? page.slice(0, input.limit) : page
         const last = visible.at(-1)
+
         return {
           nodes: visible.map((node) => ({
             documentKey: node.documentKey,
@@ -675,16 +711,19 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
         const relatedBySource = new Map<DocumentKey, Array<DocumentKey>>(
           input.documentKeys.map((documentKey) => [documentKey, []]),
         )
+
         for (const edge of edges.values()) {
           const outgoing = input.direction === "outgoing"
           const currentKey = outgoing ? edge.sourceDocumentKey : edge.target.documentKey
           const relatedKeys = relatedBySource.get(currentKey)
+
           if (relatedKeys === undefined || edge.graph !== input.graph ||
             edge.relation !== input.relation || edge.relationVersion !== input.relationVersion ||
             (outgoing ? edge.sourceDocumentKind : edge.targetDocumentKind) !== input.documentKind ||
             (outgoing ? edge.targetDocumentKind : edge.sourceDocumentKind) !== input.relatedDocumentKind) continue
           relatedKeys.push(outgoing ? edge.target.documentKey : edge.sourceDocumentKey)
         }
+
         return input.documentKeys.map((documentKey) => ({
           documentKey,
           nodes: [...(relatedBySource.get(documentKey) ?? [])]
@@ -692,6 +731,7 @@ const makeInMemoryStorage = (): DocumentGraphStorageService => {
             .slice(0, input.limit)
             .flatMap((relatedKey) => {
               const node = nodes.get(nodeKey({ graph: input.graph, documentKey: relatedKey }))
+
               return node === undefined ? [] : [{
                 documentKey: node.documentKey,
                 reference: cloneReference(node.reference),
@@ -717,5 +757,6 @@ export const inMemoryDocumentGraph = (): Layer.Layer<
   | GraphTopologyStore
 > => {
   const storage = makeInMemoryStorage()
+
   return makeDocumentGraphStorage(storage)
 }

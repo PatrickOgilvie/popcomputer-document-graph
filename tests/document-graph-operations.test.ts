@@ -31,11 +31,13 @@ import { semantic } from "../src/retrieval/graph-retrieval.js"
 const GuideId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("GraphOperationGuideId"),
 )
+
 const Guide = Schema.Struct({
   id: GuideId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
   content: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
+
 const GuideMetadata = Schema.Struct({
   kind: Schema.Literal("guide"),
 })
@@ -60,6 +62,7 @@ const graph = defineDocumentGraph({
   id: "graph-operations-test",
   documents: { Guide: GuideDocument },
 })
+
 const textDisabledGraph = defineDocumentGraph({
   id: "text-disabled-test",
   documents: {
@@ -73,11 +76,15 @@ const textDisabledGraph = defineDocumentGraph({
     }),
   },
 })
+
 const GuideNode = graph.document("Guide")
+
 const GuideContent = GuideNode.projection("guide-content")
+
 const DisabledGuideContent = textDisabledGraph
   .document("Guide")
   .projection("guide-content")
+
 const guideScope = (
   input: GraphSearchScopeInput<"Guide", "guide-content">,
 ) =>
@@ -92,16 +99,19 @@ const guideScope = (
 const guideId = Schema.decodeSync(GuideId)(
   "77777777-7777-4777-8777-777777777777",
 )
+
 const guide = Schema.decodeSync(Guide)({
   id: guideId,
   title: "National distribution",
   content: "The campaign reached retailers across the country.",
 })
+
 const profile = defineEmbeddingProfile({
   id: "test:graph-operations",
   version: "v1",
   dimensions: 2,
 })
+
 const token = Schema.decodeSync(IndexRevisionTokenSchema)("revision-1")
 
 const makeServices = (input: {
@@ -111,20 +121,24 @@ const makeServices = (input: {
 } = {}) => {
   const embeddedDocuments: Array<string> = []
   const queries: Array<string> = []
+
   const searchRequests: Array<
     Parameters<ProjectionSearchStoreService["searchCandidates"]>[0]
   > = []
+
   const textSearchRequests: Array<
     Parameters<
       ProjectionTextSearchStoreService["searchTextCandidates"]
     >[0]
   > = []
+
   let replacement: ReplaceProjectedRevision | undefined
 
   const embeddings: EmbeddingProviderService = {
     profile,
     embedDocuments: (requests) => {
       embeddedDocuments.push(...requests.map((request) => request.content))
+
       return Effect.succeed(
         requests.map((request) => ({
           contentHash: request.contentHash,
@@ -134,6 +148,7 @@ const makeServices = (input: {
     },
     embedQuery: (query) => {
       queries.push(query)
+
       return Effect.succeed([0.25, 0.75])
     },
   }
@@ -143,6 +158,7 @@ const makeServices = (input: {
       Effect.succeed(keys.map((key) => ({ key, revision: Option.none() }))),
     replaceRevision: (next) => {
       replacement = next
+
       return Effect.succeed({
         token,
         inserted: next.chunks.length,
@@ -160,6 +176,7 @@ const makeServices = (input: {
     searchCandidates: (request) => {
       searchRequests.push(request)
       const storedRevision = replacement
+
       if (storedRevision === undefined) {
         return Effect.succeed([])
       }
@@ -182,15 +199,18 @@ const makeServices = (input: {
           metadata: chunk.metadata,
         })),
       )
+
       return input.semanticDelayMs === undefined
         ? result
         : Effect.delay(result, `${input.semanticDelayMs} millis`)
     },
   }
+
   const textSearchStore: ProjectionTextSearchStoreService = {
     searchTextCandidates: (request) => {
       textSearchRequests.push(request)
       const storedRevision = replacement
+
       if (storedRevision === undefined) {
         return Effect.succeed([])
       }
@@ -213,11 +233,13 @@ const makeServices = (input: {
           metadata: chunk.metadata,
         })),
       )
+
       return input.textDelayMs === undefined
         ? result
         : Effect.delay(result, `${input.textDelayMs} millis`)
     },
   }
+
   const topologyStore: GraphTopologyStoreService = {
     replaceDocumentTopology: () =>
       Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
@@ -259,11 +281,13 @@ const makeServices = (input: {
 describe("document graph operations", () => {
   test("parses document identity once for a whole-document index", async () => {
     let identitySelections = 0
+
     const document = defineDocument({
       id: GuideId,
       value: Guide,
       identify: (value) => {
         identitySelections += 1
+
         return value.id
       },
     })
@@ -281,10 +305,12 @@ describe("document graph operations", () => {
           sections: [{ key: "body", content: value.content }],
         }),
       })
+
     const multiProjectionGraph = defineDocumentGraph({
       id: "parse-once-test",
       documents: { Guide: document },
     })
+
     const services = makeServices()
 
     const indexed = await Effect.runPromise(
@@ -304,9 +330,11 @@ describe("document graph operations", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const indexed = yield* GuideNode.index(guide)
+
         const hits = yield* GuideContent.search(
           "Where did the campaign reach?",
         )
+
         return { indexed, hits }
       }).pipe(Effect.provide(services.layer)),
     )
@@ -347,9 +375,11 @@ describe("document graph operations", () => {
       textDelayMs: number,
     ) => {
       const services = makeServices({ semanticDelayMs, textDelayMs })
+
       return Effect.runPromise(
         Effect.gen(function*() {
           yield* GuideNode.index(guide)
+
           return yield* GuideContent.search("national distribution")
         }).pipe(Effect.provide(services.layer)),
       )
@@ -399,6 +429,7 @@ describe("document graph operations", () => {
 
   test("returns invalid runtime search options through the typed channel", async () => {
     const services = makeServices()
+
     const results = await Effect.runPromise(
       Effect.all({
         graph: graph.search("distribution", { limit: 0 }).pipe(
@@ -418,6 +449,7 @@ describe("document graph operations", () => {
 
     for (const result of Object.values(results)) {
       expect(Result.isFailure(result)).toBe(true)
+
       if (Result.isFailure(result)) {
         expect(result.failure._tag).toBe("InvalidSearchQuery")
         expect(result.failure.reason).toBe("invalid_options")
@@ -441,14 +473,17 @@ describe("document graph operations", () => {
   test("sends text search the complete projection scope before its bound", async () => {
     const revision = await Effect.runPromise(GuideContent.project(guide))
     const chunk = revision.chunks[0]
+
     const requests: Array<
       Parameters<
         ProjectionTextSearchStoreService["searchTextCandidates"]
       >[0]
     > = []
+
     const textStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: (request) => {
         requests.push(request)
+
         return Effect.succeed([
           {
             score: 3,
@@ -473,9 +508,7 @@ describe("document graph operations", () => {
         candidates: { text: 7 },
         limit: 3,
       }).pipe(
-        Effect.provide(
-          Layer.succeed(ProjectionTextSearchStore, textStore),
-        ),
+        Effect.provideService(ProjectionTextSearchStore, textStore),
       ),
     )
 
@@ -505,14 +538,13 @@ describe("document graph operations", () => {
       DisabledGuideContent.search("distribution", {
         strategy: "text",
       }).pipe(
-        Effect.provide(
-          Layer.succeed(ProjectionTextSearchStore, textStore),
-        ),
+        Effect.provideService(ProjectionTextSearchStore, textStore),
         Effect.result,
       ),
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("InvalidSearchQuery")
       expect(result.failure.reason).toBe("text_disabled")
@@ -522,6 +554,7 @@ describe("document graph operations", () => {
   test("normalizes invalid text candidates through the public handle", async () => {
     const revision = await Effect.runPromise(GuideContent.project(guide))
     const chunk = revision.chunks[0]
+
     const candidate = {
       score: 3,
       chunkId: chunk.chunkId,
@@ -534,6 +567,7 @@ describe("document graph operations", () => {
       content: chunk.content,
       metadata: chunk.metadata,
     }
+
     const otherCandidate = {
       ...candidate,
       chunkId: makeChunkId({
@@ -544,7 +578,9 @@ describe("document graph operations", () => {
       }),
       sectionPart: candidate.sectionPart + 1,
     }
+
     const outOfScopeProjection = "other-projection"
+
     const cases = [
       {
         reason: "invalid_score" as const,
@@ -589,20 +625,20 @@ describe("document graph operations", () => {
       const textStore: ProjectionTextSearchStoreService = {
         searchTextCandidates: () => Effect.succeed(fixture.candidates),
       }
+
       const result = await Effect.runPromise(
         GuideContent.search("distribution", {
           strategy: "text",
           candidates: { text: 2 },
           limit: 2,
         }).pipe(
-          Effect.provide(
-            Layer.succeed(ProjectionTextSearchStore, textStore),
-          ),
+          Effect.provideService(ProjectionTextSearchStore, textStore),
           Effect.result,
         ),
       )
 
       expect(Result.isFailure(result)).toBe(true)
+
       if (
         Result.isFailure(result) &&
         result.failure._tag === "DocumentGraphUnavailable"
@@ -623,6 +659,7 @@ describe("document graph operations", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         yield* GuideNode.index(guide)
+
         return yield* GuideContent.search("distribution").pipe(
           Effect.result,
         )
@@ -630,8 +667,10 @@ describe("document graph operations", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("DocumentGraphUnavailable")
+
       if (result.failure._tag === "DocumentGraphUnavailable") {
         expect(result.failure.operation).toBe("search")
         expect(result.failure.reason).toBe("invalid_stored_data")
@@ -646,11 +685,13 @@ describe("document graph operations", () => {
 
   test("exposes one safe operational error for embedding failures", async () => {
     const services = makeServices()
+
     const providerFailure = new EmbeddingProviderFailed({
       profile: profile.id,
       reason: "unavailable",
       cause: new Error("provider credentials must stay internal"),
     })
+
     const failingEmbeddings: EmbeddingProviderService = {
       ...services.embeddings,
       embedDocuments: () => Effect.fail(providerFailure),
@@ -670,6 +711,7 @@ describe("document graph operations", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (
       Result.isFailure(result) &&
       result.failure._tag === "DocumentGraphUnavailable"
@@ -703,6 +745,7 @@ describe("document graph operations", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("InvalidSearchQuery")
       expect(result.failure.reason).toBe("empty")
@@ -711,10 +754,12 @@ describe("document graph operations", () => {
 
   test("normalizes search storage failures at the graph boundary", async () => {
     const services = makeServices()
+
     const storageFailure = new ProjectionSearchStoreFailed({
       reason: "unavailable",
       cause: new Error("database connection details"),
     })
+
     const failingSearchStore: ProjectionSearchStoreService = {
       searchCandidates: () => Effect.fail(storageFailure),
     }
@@ -732,8 +777,10 @@ describe("document graph operations", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("DocumentGraphUnavailable")
+
       if (result.failure._tag === "DocumentGraphUnavailable") {
         expect(result.failure.operation).toBe("search")
         expect(result.failure.reason).toBe("storage_failed")
@@ -750,6 +797,7 @@ describe("document graph operations", () => {
       reason: "unavailable",
       cause: new Error("text index connection details"),
     })
+
     const failingTextStore: ProjectionTextSearchStoreService = {
       searchTextCandidates: () => Effect.fail(storageFailure),
     }
@@ -758,14 +806,13 @@ describe("document graph operations", () => {
       GuideContent.search("distribution", {
         strategy: "text",
       }).pipe(
-        Effect.provide(
-          Layer.succeed(ProjectionTextSearchStore, failingTextStore),
-        ),
+        Effect.provideService(ProjectionTextSearchStore, failingTextStore),
         Effect.result,
       ),
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (
       Result.isFailure(result) &&
       result.failure._tag === "DocumentGraphUnavailable"
@@ -781,6 +828,7 @@ describe("document graph operations", () => {
 
   test("keeps optimistic indexing conflicts precise", async () => {
     const services = makeServices()
+
     const conflictingStore: ProjectionIndexStoreService = {
       ...services.indexStore,
       replaceRevision: (replacement) =>
@@ -806,6 +854,7 @@ describe("document graph operations", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("ProjectionIndexConflict")
     }
@@ -813,21 +862,25 @@ describe("document graph operations", () => {
 
   test("normalizes removal and reconciliation storage failures", async () => {
     const services = makeServices()
+
     const removeFailure = new ProjectionIndexStoreFailed({
       operation: "delete_revision",
       reason: "unavailable",
       cause: new Error("remove connection details"),
     })
+
     const reconcileFailure = new ProjectionIndexStoreFailed({
       operation: "prune_graph",
       reason: "invalid_stored_state",
       cause: new Error("invalid row details"),
     })
+
     const failingStore: ProjectionIndexStoreService = {
       ...services.indexStore,
       deleteRevision: () => Effect.fail(removeFailure),
       pruneGraph: () => Effect.fail(reconcileFailure),
     }
+
     const layer = Layer.mergeAll(
       Layer.succeed(ProjectionIndexStore, failingStore),
       Layer.succeed(GraphTopologyStore, services.topologyStore),
@@ -841,6 +894,7 @@ describe("document graph operations", () => {
     )
 
     expect(Result.isFailure(result.remove)).toBe(true)
+
     if (
       Result.isFailure(result.remove) &&
       result.remove.failure._tag === "DocumentGraphUnavailable"
@@ -850,6 +904,7 @@ describe("document graph operations", () => {
     }
 
     expect(Result.isFailure(result.reconcile)).toBe(true)
+
     if (Result.isFailure(result.reconcile)) {
       expect(result.reconcile.failure.operation).toBe("reconcile_index")
       expect(result.reconcile.failure.reason).toBe("invalid_stored_data")
@@ -858,10 +913,12 @@ describe("document graph operations", () => {
 
   test("traces operations without recording search content", async () => {
     const services = makeServices()
+
     const observed: Array<{
       readonly name: string
       readonly attributes: ReadonlyMap<string, unknown>
     }> = []
+
     const tracer = Tracer.make({
       span: (options) => {
         const span = new Tracer.NativeSpan(options)
@@ -869,6 +926,7 @@ describe("document graph operations", () => {
           name: options.name,
           attributes: span.attributes,
         })
+
         return span
       },
     })
@@ -876,7 +934,7 @@ describe("document graph operations", () => {
     await Effect.runPromise(
       GuideContent.search("private campaign wording").pipe(
         Effect.provide(services.layer),
-        Effect.provide(Layer.succeed(Tracer.Tracer, tracer)),
+        Effect.provideService(Tracer.Tracer, tracer),
       ),
     )
 
@@ -884,6 +942,7 @@ describe("document graph operations", () => {
       (candidate) =>
         candidate.name === "honertia.document_graph.search",
     )
+
     expect(Object.fromEntries(span?.attributes ?? [])).toEqual({
       "document_graph.graph": "graph-operations-test",
       "document_graph.document_kind": "Guide",
@@ -920,7 +979,7 @@ if (import.meta.url === "") {
   // @ts-expect-error Unknown metadata keys are rejected.
   GuideContent.search("query", { where: { visibility: "public" } })
 
-  GuideContent.search("query", {
+  void GuideContent.search("query", {
     where: (filter) =>
       filter.all(
         filter.eq("kind", "guide"),
@@ -928,13 +987,13 @@ if (import.meta.url === "") {
       ),
   })
 
-  GuideContent.search("query", {
+  void GuideContent.search("query", {
     where: (filter) =>
       // @ts-expect-error Builder keys are inferred from GuideMetadata.
       filter.eq("visibility", "public"),
   })
 
-  GuideContent.search("query", {
+  void GuideContent.search("query", {
     where: (filter) =>
       // @ts-expect-error Builder values preserve schema literals.
       filter.eq("kind", "article"),

@@ -13,7 +13,9 @@ type FunctionWithReturnType =
 
 function referencedAliasName(type: ESTree.TSType): string | null {
   if (type.type === "TSParenthesizedType") return referencedAliasName(type.typeAnnotation);
+
   if (type.type !== "TSTypeReference" || type.typeName.type !== "Identifier") return null;
+
   return type.typeArguments === null ||
     type.typeArguments === undefined ||
     type.typeArguments.params.length === 0
@@ -24,14 +26,17 @@ function referencedAliasName(type: ESTree.TSType): string | null {
 function lexicalTypeParameterNames(node: ESTree.Node): ReadonlySet<string> {
   const names = new Set<string>();
   let current: ESTree.Node | null = node;
+
   while (current !== null && current.type !== "Program") {
     if ("typeParameters" in current) {
       for (const parameter of current.typeParameters?.params ?? []) {
         names.add(parameter.name.name);
       }
     }
+
     current = current.parent;
   }
+
   return names;
 }
 
@@ -57,39 +62,50 @@ export const noUnknownReturnsRule = defineRule({
       visited = new Set<string>(),
     ): boolean => {
       if (type.type === "TSUnknownKeyword") return true;
+
       if (type.type === "TSParenthesizedType") {
         return resolvesToUnknown(type.typeAnnotation, shadowedAliases, visited);
       }
+
       if (type.type === "TSUnionType") {
         return type.types.some((member) =>
           resolvesToUnknown(member, shadowedAliases, visited),
         );
       }
+
       if (
         type.type === "TSTypeReference" &&
         type.typeName.type === "Identifier" &&
         (type.typeName.name === "Promise" || type.typeName.name === "PromiseLike")
       ) {
         const value = type.typeArguments?.params[0];
+
         return value !== undefined && resolvesToUnknown(value, shadowedAliases, visited);
       }
+
       const name = referencedAliasName(type);
+
       if (name === null || visited.has(name) || shadowedAliases.has(name)) return false;
       const alias = aliases.get(name);
+
       if (
         alias === undefined ||
         (alias.typeParameters !== null && alias.typeParameters !== undefined)
       ) {
         return false;
       }
+
       const nextVisited = new Set(visited);
       nextVisited.add(name);
+
       return resolvesToUnknown(alias.typeAnnotation, shadowedAliases, nextVisited);
     };
 
     const checkReturnType = (node: FunctionWithReturnType) => {
       const annotation = node.returnType;
+
       if (annotation === null || annotation === undefined) return;
+
       if (!resolvesToUnknown(annotation.typeAnnotation, lexicalTypeParameterNames(node))) return;
       context.report({ node: annotation.typeAnnotation, messageId: "unknownReturn" });
     };
@@ -99,6 +115,7 @@ export const noUnknownReturnsRule = defineRule({
         for (const statement of node.body) {
           const declaration =
             statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
+
           if (declaration?.type === "TSTypeAliasDeclaration") {
             aliases.set(declaration.id.name, declaration);
           }

@@ -2,9 +2,9 @@ import { Effect } from "effect"
 import type { DocumentKey, InvalidDocumentIdentity } from "../document/document-identity.js"
 import type { EncodedDocumentReference } from "../document/document-instance.js"
 import type { InvalidDocumentReference } from "./document-graph-errors.js"
-import {
-  type GraphNeighbourLimit,
-  type GraphRelationDefinitions,
+import type {
+  GraphNeighbourLimit,
+  GraphRelationDefinitions,
 } from "./graph-relation.js"
 import { invalidDocumentReference } from "./graph-reference.js"
 import {
@@ -39,9 +39,11 @@ export const findGraphNeighboursWorkflow = Effect.fn(
   "GraphTraversal.findNeighbours",
 )(function*<Reference>(input: FindGraphNeighboursWorkflowInput<Reference>) {
   const relation = input.relations[input.relationId]
+
   const currentKind = input.direction === "outgoing"
     ? relation?.from
     : relation?.to
+
   if (relation === undefined || currentKind !== input.currentDocumentKind) {
     return yield* Effect.die(
       new Error(
@@ -51,9 +53,11 @@ export const findGraphNeighboursWorkflow = Effect.fn(
   }
 
   const store = yield* GraphTopologyStore
+
   const neighbourKind = input.direction === "outgoing"
     ? relation.to
     : relation.from
+
   const stored = yield* store.findRelatedNodes({
     graph: input.graph,
     documentKeys: input.currentDocumentKeys,
@@ -64,47 +68,45 @@ export const findGraphNeighboursWorkflow = Effect.fn(
     relatedDocumentKind: neighbourKind,
     limit: input.limit,
   })
+
   if (stored.length !== input.currentDocumentKeys.length || stored.some(
     (group, index) => group.documentKey !== input.currentDocumentKeys[index],
   )) {
-    return yield* Effect.fail(new InvalidGraphTopologyOutput({
+    return yield* new InvalidGraphTopologyOutput({
       output: "related_nodes",
       reason: "invalid_batch",
-    }))
+    })
   }
 
   return yield* Effect.forEach(stored, (group) => Effect.gen(function*() {
     if (group.nodes.length > input.limit) {
-      return yield* Effect.fail(
-        new InvalidGraphTopologyOutput({
-          output: "related_nodes",
-          reason: "too_many",
-        }),
-      )
+      return yield* new InvalidGraphTopologyOutput({
+        output: "related_nodes",
+        reason: "too_many",
+      })
     }
 
     const seen = new Set<DocumentKey>()
     let previousKey: DocumentKey | undefined
+
     for (const candidate of group.nodes) {
       if (seen.has(candidate.documentKey)) {
-        return yield* Effect.fail(
-          new InvalidGraphTopologyOutput({
-            output: "related_nodes",
-            reason: "duplicate",
-          }),
-        )
+        return yield* new InvalidGraphTopologyOutput({
+          output: "related_nodes",
+          reason: "duplicate",
+        })
       }
+
       if (
         previousKey !== undefined &&
         String(previousKey).localeCompare(String(candidate.documentKey)) > 0
       ) {
-        return yield* Effect.fail(
-          new InvalidGraphTopologyOutput({
-            output: "related_nodes",
-            reason: "not_ordered",
-          }),
-        )
+        return yield* new InvalidGraphTopologyOutput({
+          output: "related_nodes",
+          reason: "not_ordered",
+        })
       }
+
       seen.add(candidate.documentKey)
       previousKey = candidate.documentKey
     }
@@ -117,6 +119,7 @@ export const findGraphNeighboursWorkflow = Effect.fn(
               invalidDocumentReference("unknown_document_kind"),
             )
           }
+
           return input.referenceKey(reference).pipe(
             Effect.flatMap((parsedKey) =>
               parsedKey === candidate.documentKey
@@ -132,6 +135,7 @@ export const findGraphNeighboursWorkflow = Effect.fn(
         }),
       )
     )
+
     return { documentKey: group.documentKey, nodes }
   }))
 })

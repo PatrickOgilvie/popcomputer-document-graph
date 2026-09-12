@@ -16,18 +16,23 @@ import {
 const AgencyId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("RelationAgencyId"),
 )
+
 const WorkId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("RelationWorkId"),
 )
+
 const Agency = Schema.Struct({
   id: AgencyId,
   name: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
+
 const Work = Schema.Struct({
   id: WorkId,
   agencyIds: Schema.Array(AgencyId),
 })
+
 const AgencyDocument = defineDocument(Agency, { id: "id" })
+
 const WorkDocument = defineDocument(Work, { id: "id" })
 
 const graph = defineDocumentGraph({
@@ -42,23 +47,29 @@ const graph = defineDocumentGraph({
     }),
   }),
 })
+
 const WorkNode = graph.document("Work")
+
 const AgencyNode = graph.document("Agency")
 
 const workId = Schema.decodeSync(WorkId)(
   "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 )
+
 const firstAgencyId = Schema.decodeSync(AgencyId)(
   "11111111-1111-4111-8111-111111111111",
 )
+
 const secondAgencyId = Schema.decodeSync(AgencyId)(
   "22222222-2222-4222-8222-222222222222",
 )
+
 const embeddingProfile = defineEmbeddingProfile({
   id: "test:relations",
   version: "v1",
   dimensions: 1,
 })
+
 const embeddings: EmbeddingProviderService = {
   profile: embeddingProfile,
   embedDocuments: (requests) =>
@@ -85,9 +96,11 @@ describe("graph relations", () => {
           id: workId,
           agencyIds: [firstAgencyId, secondAgencyId],
         })
+
         const initial = yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         })
+
         const initialIncoming = yield* AgencyNode.neighbours(
           firstAgencyId,
           {
@@ -95,13 +108,16 @@ describe("graph relations", () => {
             direction: "incoming",
           },
         )
+
         const second = yield* WorkNode.index({
           id: workId,
           agencyIds: [secondAgencyId],
         })
+
         const updated = yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         })
+
         const removedIncoming = yield* AgencyNode.neighbours(
           firstAgencyId,
           {
@@ -109,6 +125,7 @@ describe("graph relations", () => {
             direction: "incoming",
           },
         )
+
         const retainedIncoming = yield* AgencyNode.neighbours(
           secondAgencyId,
           {
@@ -116,6 +133,7 @@ describe("graph relations", () => {
             direction: "incoming",
           },
         )
+
         return {
           first,
           initial,
@@ -162,20 +180,25 @@ describe("graph relations", () => {
           id: workId,
           agencyIds: [firstAgencyId],
         })
+
         const rejected = yield* WorkNode.index({
           id: workId,
           agencyIds: [secondAgencyId, secondAgencyId],
         }).pipe(Effect.result)
+
         const retained = yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         })
+
         return { rejected, retained }
       }).pipe(Effect.provide(makeLive())),
     )
 
     expect(Result.isFailure(result.rejected)).toBe(true)
+
     if (Result.isFailure(result.rejected)) {
       expect(result.rejected.failure._tag).toBe("InvalidGraphRelationOutput")
+
       if (result.rejected.failure._tag === "InvalidGraphRelationOutput") {
         expect(result.rejected.failure).toMatchObject({
           graph: graph.id,
@@ -185,6 +208,7 @@ describe("graph relations", () => {
         })
       }
     }
+
     expect(result.retained).toEqual([
       { graph: graph.id, kind: "Agency", id: firstAgencyId },
     ])
@@ -199,6 +223,7 @@ describe("graph relations", () => {
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("InvalidGraphTraversal")
       expect(result.failure.reason).toBe("invalid_limit")
@@ -210,6 +235,7 @@ describe("graph relations", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const documentKey = yield* AgencyNode.key(firstAgencyId)
+
         const candidate = {
           documentKey,
           reference: {
@@ -219,6 +245,7 @@ describe("graph relations", () => {
           },
           state: "Referenced" as const,
         }
+
         const malformed: GraphTopologyStoreService = {
           replaceDocumentTopology: () =>
             Effect.succeed({ inserted: 0, retained: 0, deleted: 0 }),
@@ -241,18 +268,21 @@ describe("graph relations", () => {
               nodes: malformedOutput === "duplicate" ? [candidate, candidate] : [candidate],
             }))),
         }
+
         return yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         }).pipe(
-          Effect.provide(Layer.succeed(GraphTopologyStore, malformed)),
+          Effect.provideService(GraphTopologyStore, malformed),
           Effect.result,
         )
       }),
     )
 
     expect(Result.isFailure(result)).toBe(true)
+
     if (Result.isFailure(result)) {
       expect(result.failure._tag).toBe("DocumentGraphUnavailable")
+
       if (result.failure._tag === "DocumentGraphUnavailable") {
         expect(result.failure.operation).toBe("neighbours")
         expect(result.failure.reason).toBe("invalid_stored_data")
@@ -270,9 +300,11 @@ describe("graph relations", () => {
           agencyIds: [firstAgencyId, secondAgencyId],
         })
         const removed = yield* AgencyNode.remove(firstAgencyId)
+
         const neighbours = yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         })
+
         return { removed, neighbours }
       }).pipe(Effect.provide(makeLive())),
     )
@@ -293,6 +325,7 @@ describe("graph relations", () => {
         const before = yield* graph.nodes({ states: ["Referenced"] })
         const removed = yield* WorkNode.remove(workId)
         const after = yield* graph.nodes()
+
         return { before, removed, after }
       }).pipe(Effect.provide(makeLive())),
     )
@@ -313,7 +346,9 @@ describe("graph relations", () => {
       id: graph.id,
       documents: { Agency: AgencyDocument, Work: WorkDocument },
     })
+
     const live = makeLive()
+
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         yield* WorkNode.index({
@@ -321,9 +356,11 @@ describe("graph relations", () => {
           agencyIds: [firstAgencyId],
         })
         const reconciled = yield* graphWithoutRelations.reconcileIndex()
+
         const neighbours = yield* WorkNode.neighbours(workId, {
           via: "deliveredBy",
         })
+
         return { reconciled, neighbours }
       }).pipe(Effect.provide(live)),
     )
@@ -345,19 +382,19 @@ describe("graph relations", () => {
 })
 
 if (import.meta.url === "") {
-  AgencyNode.neighbours(firstAgencyId, {
+  void AgencyNode.neighbours(firstAgencyId, {
     via: "deliveredBy",
     direction: "incoming",
   })
 
   // @ts-expect-error A Work has no outgoing relation with this name.
-  WorkNode.neighbours(workId, { via: "unknown" })
+  void WorkNode.neighbours(workId, { via: "unknown" })
 
   // @ts-expect-error Agency has no outgoing deliveredBy relation.
-  AgencyNode.neighbours(firstAgencyId, { via: "deliveredBy" })
+  void AgencyNode.neighbours(firstAgencyId, { via: "deliveredBy" })
 
   // @ts-expect-error Work is not the target of deliveredBy.
-  WorkNode.neighbours(workId, {
+  void WorkNode.neighbours(workId, {
     via: "deliveredBy",
     direction: "incoming",
   })

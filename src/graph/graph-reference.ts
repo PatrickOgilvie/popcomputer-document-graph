@@ -34,10 +34,13 @@ export const makeGraphReferenceCodec = <
     id: DocumentId<Documents, Kind>,
   ): DocumentReference<GraphId, Documents, Kind> => {
     const definition: Documents[Kind] | undefined = documents[kind]
+
     if (definition === undefined) {
       throw new Error(`Unknown document kind: ${kind}`)
     }
-    const parsedId = Schema.decodeUnknownSync(definition.id)(id)
+
+    const parsedId = Schema.decodeSync(definition.id)(id)
+
     // SAFETY: Kind selected this definition and its ID schema parsed parsedId.
     return {
       graph,
@@ -59,20 +62,22 @@ export const makeGraphReferenceCodec = <
     ).pipe(
       Effect.mapError(() => invalidDocumentReference("invalid_shape")),
     )
+
     if (parsed.graph !== graph) {
-      return yield* Effect.fail(invalidDocumentReference("wrong_graph"))
+      return yield* invalidDocumentReference("wrong_graph")
     }
 
     const definition: RegisteredDocumentDefinition | undefined =
       documents[parsed.kind]
+
     if (definition === undefined) {
-      return yield* Effect.fail(
-        invalidDocumentReference("unknown_document_kind"),
-      )
+      return yield* invalidDocumentReference("unknown_document_kind")
     }
+
     const id = yield* Schema.decodeUnknownEffect(definition.id)(parsed.id).pipe(
       Effect.mapError(() => invalidDocumentReference("invalid_document_id")),
     )
+
     // SAFETY: Graph, kind, and the selected definition's ID schema were checked.
     return {
       graph,
@@ -87,17 +92,20 @@ export const makeGraphReferenceCodec = <
     "DocumentGraph.referenceKey",
   )(function*(target) {
     const definition = documents[target.kind]
+
     if (definition === undefined) {
       return yield* Effect.die(
         new Error(`Unknown document kind ${target.kind} for graph ${graph}`),
       )
     }
+
     const encodedId = yield* encodeDocumentId(
       graph,
       target.kind,
       definition.id,
       target.id,
     )
+
     return makeDocumentKey({
       graph,
       documentKind: target.kind,

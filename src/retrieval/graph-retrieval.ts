@@ -76,10 +76,9 @@ export const MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS = 10_000
 
 /** Runtime schema for graph-constrained retrieval targets. */
 export const GraphSearchTargetSchema = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("AllDocuments") }),
-  Schema.Struct({ _tag: Schema.Literal("NoDocuments") }),
-  Schema.Struct({
-    _tag: Schema.Literal("DocumentKeys"),
+  Schema.TaggedStruct("AllDocuments", {}),
+  Schema.TaggedStruct("NoDocuments", {}),
+  Schema.TaggedStruct("DocumentKeys", {
     documentKeys: Schema.NonEmptyArray(DocumentKeySchema).pipe(
       Schema.check(
         Schema.isMaxLength(MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS),
@@ -103,15 +102,19 @@ export const documentKeys = (
   keys: readonly [DocumentKey, ...ReadonlyArray<DocumentKey>],
 ): DocumentKeys => {
   const unique = Array.from(new Set(keys)).sort()
+
   if (unique.length > MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS) {
     throw new Error(
       `A graph search target cannot exceed ${MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS} document keys`,
     )
   }
+
   const [first, ...rest] = unique
+
   if (first === undefined) {
     throw new Error("A document-key graph search target cannot be empty")
   }
+
   return {
     _tag: "DocumentKeys",
     documentKeys: [first, ...rest],
@@ -121,7 +124,7 @@ export const documentKeys = (
 const normalizeGraphSearchTarget = (
   target: GraphSearchTarget | undefined,
 ): GraphSearchTarget => {
-  const parsed = Schema.decodeUnknownSync(GraphSearchTargetSchema)(
+  const parsed = Schema.decodeSync(GraphSearchTargetSchema)(
     target ?? allDocuments(),
   )
 
@@ -132,6 +135,7 @@ const normalizeGraphSearchTarget = (
       return noDocuments()
     case "DocumentKeys": {
       const [first, ...rest] = parsed.documentKeys
+
       return documentKeys([first, ...rest])
     }
   }
@@ -242,9 +246,11 @@ export const projectionMatchesGraphSearchScope = (
   ) {
     return false
   }
+
   if (scope.excludeDocumentKinds.includes(target.documentKind)) {
     return false
   }
+
   if (
     scope.includeProjections.length > 0 &&
     !scope.includeProjections.includes(target.projection)
@@ -297,6 +303,7 @@ export const semantic = (input: {
   const candidates = Schema.decodeSync(SearchResultCountSchema)(
     input.candidates ?? 50,
   )
+
   const results = Schema.decodeSync(SearchResultCountSchema)(
     input.results ?? 10,
   )
@@ -329,6 +336,7 @@ export const text = (input: {
   const candidates = Schema.decodeSync(SearchResultCountSchema)(
     input.candidates ?? 50,
   )
+
   const results = Schema.decodeSync(SearchResultCountSchema)(
     input.results ?? 10,
   )
@@ -686,6 +694,7 @@ const candidateHasValidIdentity = (
     documentKind: candidate.reference.kind,
     encodedId: candidate.reference.id,
   })
+
   if (candidate.documentKey !== documentKey) {
     return false
   }
@@ -720,6 +729,7 @@ const validateCandidates = <Candidate extends CandidateFields>(
 
   const seen = new Set<ChunkId>()
   let previousScore: number | undefined
+
   for (const candidate of candidates) {
     if (
       !Number.isFinite(candidate.score) ||
@@ -776,8 +786,10 @@ const selectSearchHits = (
 ): ReadonlyArray<SearchHit> =>
   candidates.slice(0, strategy.results).map((candidate, index) => {
     const rank = index + 1
+
     const contribution =
       strategy.weight / (strategy.rankConstant + rank)
+
     const channel =
       strategy._tag === "Semantic" ? "semantic" : "text"
 
@@ -829,6 +841,7 @@ export const prepareSemanticQuery: (
 > = Effect.fn("GraphRetrieval.prepareSemanticQuery")(function*(queryInput) {
     const embeddings = yield* EmbeddingProvider
     const query = yield* parseSearchQuery(queryInput)
+
     const vector = yield* embeddings.embedQuery(query).pipe(
       Effect.flatMap((output) =>
         validateQueryVector(embeddings.profile, output),
@@ -857,12 +870,14 @@ export const searchGraphWithPreparedSemanticQuery: (
     }
 
     const store = yield* ProjectionSearchStore
+
     const candidates = yield* store.searchCandidates({
       vector: input.query.vector,
       embeddingProfile: input.query.embeddingProfile,
       scope: input.scope,
       candidates: input.strategy.candidates,
     })
+
     const validated = yield* validateCandidates("semantic", candidates, {
       scope: input.scope,
       candidates: input.strategy.candidates,
@@ -886,10 +901,12 @@ export const searchGraph: (
 > = Effect.fn("GraphRetrieval.searchSemantic")(function*(input) {
     if (input.scope.target._tag === "NoDocuments") {
       yield* parseSearchQuery(input.query)
+
       return []
     }
 
     const query = yield* prepareSemanticQuery(input.query)
+
     return yield* searchGraphWithPreparedSemanticQuery({
       query,
       scope: input.scope,
@@ -911,6 +928,7 @@ export const searchGraphText: (
   ProjectionTextSearchStore
 > = Effect.fn("GraphRetrieval.searchText")(function*(input) {
     const query = yield* parseSearchQuery(input.query)
+
     return yield* searchGraphTextWithParsedQuery({
       query,
       scope: input.scope,
@@ -931,12 +949,14 @@ const searchGraphTextWithParsedQuery = (
     }
 
     const store = yield* ProjectionTextSearchStore
+
     const candidates = yield* store.searchTextCandidates({
       query: input.query,
       policy: input.strategy.policy,
       scope: input.scope,
       candidates: input.strategy.candidates,
     })
+
     const validated = yield* validateCandidates("text", candidates, {
       scope: input.scope,
       candidates: input.strategy.candidates,
@@ -962,6 +982,7 @@ const JsonPrimitiveSchema = Schema.Union([
   Schema.Finite,
   Schema.String,
 ])
+
 const JsonRecordSchema = Schema.Record(Schema.String, JsonValueSchema)
 
 const jsonValuesEqual = (left: JsonValue, right: JsonValue): boolean => {
@@ -978,10 +999,12 @@ const jsonValuesEqual = (left: JsonValue, right: JsonValue): boolean => {
       left.length === right.length &&
       left.every((value, index) => {
         const other = right[index]
+
         return other !== undefined && jsonValuesEqual(value, other)
       })
     )
   }
+
   if (Array.isArray(right)) return false
 
   if (
@@ -990,10 +1013,12 @@ const jsonValuesEqual = (left: JsonValue, right: JsonValue): boolean => {
   ) {
     return false
   }
+
   const leftRecord = left
   const rightRecord = right
   const leftKeys = Object.keys(leftRecord).sort()
   const rightKeys = Object.keys(rightRecord).sort()
+
   if (
     leftKeys.length !== rightKeys.length ||
     leftKeys.some((key, index) => key !== rightKeys[index])
@@ -1004,6 +1029,7 @@ const jsonValuesEqual = (left: JsonValue, right: JsonValue): boolean => {
   return leftKeys.every((key) => {
     const leftValue = leftRecord[key]
     const rightValue = rightRecord[key]
+
     return (
       leftValue !== undefined &&
       rightValue !== undefined &&
@@ -1043,8 +1069,10 @@ const validateHybridCandidateAgreement = (
   const textByChunk = new Map(
     textHits.map((hit) => [hit.chunkId, hit] as const),
   )
+
   for (const semanticHit of semanticHits) {
     const textHit = textByChunk.get(semanticHit.chunkId)
+
     if (
       textHit !== undefined &&
       !candidatePayloadsEqual(semanticHit, textHit)
@@ -1135,16 +1163,19 @@ export const searchGraphHybridWithSemanticQuery: (
 > = Effect.fn("GraphRetrieval.searchHybridPrepared")(function*(input) {
     if (input.scope.target._tag === "NoDocuments") {
       yield* parseSearchQuery(input.query)
+
       return []
     }
 
     const hybridStore = yield* Effect.serviceOption(
       ProjectionHybridSearchStore,
     )
+
     const [semanticHits, textHits] = Option.isSome(hybridStore)
       ? yield* Effect.gen(function*() {
           const query = yield* parseSearchQuery(input.query)
           const prepared = yield* input.semanticQuery
+
           const candidates = yield* hybridStore.value.searchHybridCandidates({
             query,
             vector: prepared.vector,
@@ -1154,6 +1185,7 @@ export const searchGraphHybridWithSemanticQuery: (
             semanticCandidates: input.semantic.candidates,
             textCandidates: input.text.candidates,
           })
+
           const [semanticCandidates, textCandidates] = yield* Effect.all([
             validateCandidates("semantic", candidates.semantic, {
               scope: input.scope,

@@ -42,17 +42,21 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 2,
 })
+
 const deployment = {
   deploymentId: "test:turbopuffer-projection-search",
   endpoint: { _tag: "Region" as const, region: "gcp-us-central1" },
 }
+
 const partition = makeTurbopufferWorkspacePartition({
   ...deployment,
   workspace: "tp-search-tests",
   embeddingProfile: profile,
   schemaGeneration: 3,
 })
+
 const textPolicy = parseTextSearchPolicy({ language: "english" })
+
 if (textPolicy === "disabled") {
   throw new Error("Turbopuffer search tests require full-text search")
 }
@@ -62,20 +66,24 @@ const reference = {
   kind: "Article",
   id: "article-1",
 } as const
+
 const documentKey = makeDocumentKey({
   graph: reference.graph,
   documentKind: reference.kind,
   encodedId: reference.id,
 })
+
 const chunkId = makeChunkId({
   documentKey,
   projection: "sections",
   sectionKey: "body",
   sectionPart: 0,
 })
+
 const revisionHash = Schema.decodeSync(ProjectionRevisionHashSchema)(
   "a".repeat(64),
 )
+
 const contentHash = Schema.decodeSync(ContentHashSchema)("c".repeat(64))
 
 const resultRow = (
@@ -126,6 +134,7 @@ const makeCoordinator = (input?: {
   readonly loadRevisions?: ProjectionPublicationCoordinatorService["loadRevisions"] | undefined
 }): ProjectionPublicationCoordinatorService => {
   const revision = input?.revision ?? activeRevision()
+
   return {
     indexGeneration:
       input?.indexGeneration ?? partition.d1IndexGeneration,
@@ -157,6 +166,7 @@ const makeClient = (input: {
 })
 
 const config = { partition }
+
 const registered = [
   {
     documentKind: "Article",
@@ -179,6 +189,7 @@ describe("Turbopuffer projection search", () => {
       client: makeClient({
         query: () => {
           providerCalls += 1
+
           return Effect.succeed({ rows: [] })
         },
       }),
@@ -192,17 +203,21 @@ describe("Turbopuffer projection search", () => {
 
   test("pushes resolved document keys into ANN filters before top-k", async () => {
     const requests: Array<NamespaceQueryParams> = []
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator(),
       client: makeClient({
         query: (request) => {
           requests.push(request)
+
           return Effect.succeed({ rows: [resultRow(0.2)] })
         },
       }),
     })
+
     const strategy = semantic({ candidates: 17, results: 4 })
+
     const scope = makeGraphSearchScope(
       reference.graph,
       { target: documentKeys([documentKey]) },
@@ -241,21 +256,25 @@ describe("Turbopuffer projection search", () => {
 
   test("runs lexical retrieval with the namespace embedding partition", async () => {
     const requests: Array<NamespaceQueryParams> = []
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator(),
       client: makeClient({
         query: (request) => {
           requests.push(request)
+
           return Effect.succeed({ rows: [resultRow(6.25)] })
         },
       }),
     })
+
     const strategy = text({
       policy: textPolicy,
       candidates: 9,
       results: 3,
     })
+
     const scope = makeGraphSearchScope(reference.graph, {}, registered)
 
     const candidates = await Effect.runPromise(
@@ -283,12 +302,14 @@ describe("Turbopuffer projection search", () => {
 
   test("keeps hybrid channel rankings separate and requests no provider rerank", async () => {
     const requests: Array<NamespaceMultiQueryParams> = []
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator(),
       client: makeClient({
         multiQuery: (request) => {
           requests.push(request)
+
           return Effect.succeed({
             results: [
               { rows: [resultRow(0.1)] },
@@ -298,12 +319,15 @@ describe("Turbopuffer projection search", () => {
         },
       }),
     })
+
     const semanticStrategy = semantic({ candidates: 12, results: 4 })
+
     const textStrategy = text({
       policy: textPolicy,
       candidates: 8,
       results: 4,
     })
+
     const scope = makeGraphSearchScope(
       reference.graph,
       { target: documentKeys([documentKey]) },
@@ -339,26 +363,32 @@ describe("Turbopuffer projection search", () => {
 
   test("short-circuits every channel when D1 resolves no graph documents", async () => {
     const calls = { query: 0, multiQuery: 0 }
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator(),
       client: makeClient({
         query: () => {
           calls.query += 1
+
           return Effect.succeed({ rows: [] })
         },
         multiQuery: () => {
           calls.multiQuery += 1
+
           return Effect.succeed({ results: [] })
         },
       }),
     })
+
     const scope = makeGraphSearchScope(
       reference.graph,
       { target: noDocuments() },
       registered,
     )
+
     const semanticStrategy = semantic({ candidates: 5, results: 2 })
+
     const textStrategy = text({
       policy: textPolicy,
       candidates: 5,
@@ -415,6 +445,7 @@ describe("Turbopuffer projection search", () => {
         query: () => Effect.succeed({} as never),
       }),
     })
+
     const hybridStores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator(),
@@ -426,12 +457,15 @@ describe("Turbopuffer projection search", () => {
         } as never),
       }),
     })
+
     const semanticStrategy = semantic({ candidates: 2, results: 1 })
+
     const textStrategy = text({
       policy: textPolicy,
       candidates: 2,
       results: 1,
     })
+
     const scope = makeGraphSearchScope(reference.graph, {}, registered)
 
     const [queryError, multiQueryError] = await Effect.runPromise(
@@ -473,27 +507,33 @@ describe("Turbopuffer projection search", () => {
       sectionKey: "first",
       sectionPart: 0,
     })
+
     const secondChunkId = makeChunkId({
       documentKey,
       projection: "sections",
       sectionKey: "second",
       sectionPart: 0,
     })
+
     const lowerChunkId = makeChunkId({
       documentKey,
       projection: "sections",
       sectionKey: "lower",
       sectionPart: 0,
     })
+
     const firstContentHash = Schema.decodeSync(ContentHashSchema)(
       "1".repeat(64),
     )
+
     const secondContentHash = Schema.decodeSync(ContentHashSchema)(
       "2".repeat(64),
     )
+
     const lowerContentHash = Schema.decodeSync(ContentHashSchema)(
       "3".repeat(64),
     )
+
     const coordinator = makeCoordinator({
       revision: activeRevision({
         chunks: [
@@ -503,6 +543,7 @@ describe("Turbopuffer projection search", () => {
         ],
       }),
     })
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator,
@@ -526,6 +567,7 @@ describe("Turbopuffer projection search", () => {
         ] }),
       }),
     })
+
     const strategy = text({
       policy: textPolicy,
       candidates: 5,
@@ -550,11 +592,13 @@ describe("Turbopuffer projection search", () => {
 
   test("skips the D1 authority read when a ranked response has no rows", async () => {
     let loads = 0
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator({
         loadRevisions: () => {
           loads += 1
+
           return Effect.die("The empty result must not read D1")
         },
       }),
@@ -562,6 +606,7 @@ describe("Turbopuffer projection search", () => {
         query: () => Effect.succeed({ rows: [] }),
       }),
     })
+
     const strategy = semantic({ candidates: 2, results: 1 })
 
     const candidates = await Effect.runPromise(
@@ -581,21 +626,26 @@ describe("Turbopuffer projection search", () => {
     const pendingRevisionHash = Schema.decodeSync(
       ProjectionRevisionHashSchema,
     )("d".repeat(64))
+
     const pendingChunkId = makeChunkId({
       documentKey,
       projection: "sections",
       sectionKey: "pending",
       sectionPart: 0,
     })
+
     const pendingContentHash = Schema.decodeSync(ContentHashSchema)(
       "e".repeat(64),
     )
+
     const loadedKeys: Array<ReadonlyArray<unknown>> = []
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator({
         loadRevisions: (keys) => {
           loadedKeys.push(keys)
+
           return Effect.succeed(keys.map((key) => ({
             key,
             revision: Option.some(activeRevision()),
@@ -614,6 +664,7 @@ describe("Turbopuffer projection search", () => {
         ] }),
       }),
     })
+
     const strategy = semantic({ candidates: 3, results: 2 })
 
     const error = await Effect.runPromise(
@@ -683,6 +734,7 @@ describe("Turbopuffer projection search", () => {
         query: () => Effect.succeed({ rows: [{ id: "not-a-row" }] }),
       }),
     })
+
     const strategy = semantic({ candidates: 2, results: 1 })
     const scope = makeGraphSearchScope(reference.graph, {}, registered)
 
@@ -734,6 +786,7 @@ describe("Turbopuffer projection search", () => {
       embeddingProfile: profile,
       schemaGeneration: 3,
     })
+
     const stores = makeTurbopufferProjectionSearchStores({
       config,
       coordinator: makeCoordinator(),
@@ -743,6 +796,7 @@ describe("Turbopuffer projection search", () => {
         }),
       }),
     })
+
     const strategy = semantic({ candidates: 2, results: 1 })
     const scope = makeGraphSearchScope(reference.graph, {}, registered)
 

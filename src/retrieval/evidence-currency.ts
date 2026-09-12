@@ -69,19 +69,23 @@ export const verifyEvidenceCurrency: (
 
     const store = yield* ProjectionIndexStore
     const uniqueKeys = new Map<string, ProjectionIndexKey>()
+
     for (const reference of references) {
       const key = {
         documentKey: reference.documentKey,
         projection: reference.projectionId,
       }
+
       uniqueKeys.set(revisionIdentity(key), key)
     }
 
     const keys = Array.from(uniqueKeys.values())
     const [firstKey, ...remainingKeys] = keys
+
     if (firstKey === undefined) return []
 
     const lookups = yield* store.loadRevisions([firstKey, ...remainingKeys])
+
     const revisionByIdentity = new Map(
       lookups.map((lookup) => [revisionIdentity(lookup.key), lookup.revision]),
     )
@@ -91,6 +95,7 @@ export const verifyEvidenceCurrency: (
         documentKey: reference.documentKey,
         projection: reference.projectionId,
       })) ?? Option.none()
+
       return Option.isNone(revision)
         ? "Missing"
         : revision.value.revisionHash === reference.revisionHash

@@ -14,6 +14,7 @@ import {
 } from "../src/adapter.js"
 
 const AgencyId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("AgencyId"))
+
 const WorkId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("WorkId"))
 
 const AgencySchema = Schema.Struct({
@@ -92,13 +93,17 @@ const graph = defineDocumentGraph({
     Work: WorkDocument,
   },
 })
+
 const AgencyNode = graph.document("Agency")
+
 const WorkNode = graph.document("Work")
+
 const WorkEvidence = WorkNode.projection("work-evidence")
 
 const agencyId = Schema.decodeSync(AgencyId)(
   "11111111-1111-4111-8111-111111111111",
 )
+
 const workId = Schema.decodeSync(WorkId)(
   "22222222-2222-4222-8222-222222222222",
 )
@@ -106,6 +111,7 @@ const workId = Schema.decodeSync(WorkId)(
 describe("defineDocumentGraph", () => {
   test("rejects duplicate projection IDs while compiling the graph", () => {
     const duplicateId: string = "work-evidence"
+
     const duplicateDocument = WorkDocument.vectorise({
       id: duplicateId,
       version: "v2",
@@ -219,6 +225,7 @@ describe("defineDocumentGraph", () => {
         },
       ],
     })
+
     const revision = await Effect.runPromise(WorkEvidence.project(work))
 
     expect(revision.chunks[0]).toMatchObject({
@@ -268,12 +275,15 @@ describe("defineDocumentGraph", () => {
         },
       ],
     })
+
     const firstRevision = await Effect.runPromise(
       WorkEvidence.project(value),
     )
+
     const secondRevision = await Effect.runPromise(
       WorkEvidence.project(value),
     )
+
     const documentKey = await Effect.runPromise(WorkNode.key(workId))
     const first = firstRevision.chunks
 
@@ -344,12 +354,15 @@ describe("defineDocumentGraph", () => {
         separator: "||",
       }),
     })
+
     const paragraphGraph = defineDocumentGraph({
       id: "paragraph-catalog",
       documents: { Work: ParagraphWorkDocument },
     })
+
     const ParagraphWork = paragraphGraph.document("Work")
     const WorkParagraphs = ParagraphWork.projection("work-paragraphs")
+
     const value = Schema.decodeSync(WorkSchema)({
       id: workId,
       title: "Challenger launch",
@@ -361,11 +374,13 @@ describe("defineDocumentGraph", () => {
         },
       ],
     })
+
     const target = ParagraphWork.ref(workId)
 
     const revision = await Effect.runPromise(
       WorkParagraphs.project(value),
     )
+
     const chunks = revision.chunks
 
     const storageIdentity = chunks.map(
@@ -442,6 +457,7 @@ describe("defineDocumentGraph", () => {
 
   test("keeps logical identities stable while content revisions change", async () => {
     const target = WorkNode.ref(workId)
+
     const makeValue = (text: string) =>
       Schema.decodeSync(WorkSchema)({
         id: workId,
@@ -454,11 +470,13 @@ describe("defineDocumentGraph", () => {
         makeValue("Reached national retail distribution."),
       ),
     )
+
     const afterRevision = await Effect.runPromise(
       WorkEvidence.project(
         makeValue("Reached international retail distribution."),
       ),
     )
+
     const before = beforeRevision.chunks[0]
     const after = afterRevision.chunks[0]
 
@@ -488,9 +506,11 @@ describe("defineDocumentGraph", () => {
     const before = await Effect.runPromise(
       WorkEvidence.project(makeValue("Challenger launch")),
     )
+
     const after = await Effect.runPromise(
       WorkEvidence.project(makeValue("National launch")),
     )
+
     const beforeChunk = before.chunks[0]
     const afterChunk = after.chunks[0]
 
@@ -509,9 +529,11 @@ describe("defineDocumentGraph", () => {
       text: Schema.Trimmed.check(Schema.isNonEmpty()),
       reviewStatus: Schema.Literals(["source", "reviewed"]),
     })
+
     const Metadata = Schema.Struct({
       reviewStatus: Schema.Literals(["source", "reviewed"]),
     })
+
     const MetadataDocument = defineDocument({
       id: WorkId,
       value: MetadataValue,
@@ -531,13 +553,16 @@ describe("defineDocumentGraph", () => {
       }),
       chunking: sectionChunking({ maximumCharacters: 128 }),
     })
+
     const metadataGraph = defineDocumentGraph({
       id: "metadata-revision-test",
       documents: { Work: MetadataDocument },
     })
+
     const MetadataProjection = metadataGraph
       .document("Work")
       .projection("metadata-revision")
+
     const makeValue = (reviewStatus: "source" | "reviewed") =>
       Schema.decodeSync(MetadataValue)({
         id: workId,
@@ -548,9 +573,11 @@ describe("defineDocumentGraph", () => {
     const beforeRevision = await Effect.runPromise(
       MetadataProjection.project(makeValue("source")),
     )
+
     const afterRevision = await Effect.runPromise(
       MetadataProjection.project(makeValue("reviewed")),
     )
+
     const before = beforeRevision.chunks[0]
     const after = afterRevision.chunks[0]
 
@@ -569,6 +596,7 @@ describe("defineDocumentGraph", () => {
       label: Schema.Trimmed.check(Schema.isNonEmpty()),
       text: Schema.Trimmed.check(Schema.isNonEmpty()),
     })
+
     const focalContentChunking = defineChunker({
       id: "focal-content",
       version: "v1",
@@ -581,6 +609,7 @@ describe("defineDocumentGraph", () => {
         embeddingContent: section.content,
       }],
     })({ maximumCharacters: 128 })
+
     const makeSearchGraph = (contextWeight: number) => {
       const SearchDocument = defineDocument(SearchValue, {
         id: "id",
@@ -608,14 +637,18 @@ describe("defineDocumentGraph", () => {
         documents: { Work: SearchDocument },
       })
     }
+
     const firstGraph = makeSearchGraph(2)
     const secondGraph = makeSearchGraph(5)
+
     const firstProjection = firstGraph
       .document("Work")
       .projection("searchable-content")
+
     const secondProjection = secondGraph
       .document("Work")
       .projection("searchable-content")
+
     const makeValue = (label: string) =>
       Schema.decodeSync(SearchValue)({
         id: workId,
@@ -627,12 +660,15 @@ describe("defineDocumentGraph", () => {
     const before = await Effect.runPromise(
       firstProjection.project(makeValue("Outcome")),
     )
+
     const relabelled = await Effect.runPromise(
       firstProjection.project(makeValue("Result")),
     )
+
     const reweighted = await Effect.runPromise(
       secondProjection.project(makeValue("Outcome")),
     )
+
     const beforeChunk = before.chunks[0]
     const relabelledChunk = relabelled.chunks[0]
     const reweightedChunk = reweighted.chunks[0]
@@ -655,6 +691,7 @@ describe("defineDocumentGraph", () => {
   test("hashes the exact embedding text with SHA-256", async () => {
     const HashId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("HashId"))
     const HashValue = Schema.Struct({ id: HashId, text: Schema.String })
+
     const HashDocument = defineDocument({
       id: HashId,
       value: HashValue,
@@ -667,19 +704,24 @@ describe("defineDocumentGraph", () => {
       }),
       chunking: sectionChunking({ maximumCharacters: 128 }),
     })
+
     const hashGraph = defineDocumentGraph({
       id: "hash-test",
       documents: { Hash: HashDocument },
     })
+
     const HashBody = hashGraph.document("Hash").projection("body")
+
     const id = Schema.decodeSync(HashId)(
       "33333333-3333-4333-8333-333333333333",
     )
+
     const value = Schema.decodeSync(HashValue)({ id, text: "abc" })
 
     const revision = await Effect.runPromise(
       HashBody.project(value),
     )
+
     const chunk = revision.chunks[0]
 
     expect(chunk.content).toBe("abc")
@@ -702,11 +744,13 @@ describe("defineDocumentGraph", () => {
         }),
         chunking: sectionChunking({ maximumCharacters }),
       })
+
     const makeGraph = (maximumCharacters: number) =>
       defineDocumentGraph({
         id: "configuration-test",
         documents: { Work: makeDocument(maximumCharacters) },
       })
+
     const value = Schema.decodeSync(WorkSchema)({
       id: workId,
       title: "Challenger launch",
@@ -714,20 +758,26 @@ describe("defineDocumentGraph", () => {
         { id: "outcome", kind: "outcome", text: "An outcome." },
       ],
     })
+
     const firstGraph = makeGraph(128)
     const secondGraph = makeGraph(256)
+
     const FirstEvidence = firstGraph
       .document("Work")
       .projection("work-evidence")
+
     const SecondEvidence = secondGraph
       .document("Work")
       .projection("work-evidence")
+
     const firstRevision = await Effect.runPromise(
       FirstEvidence.project(value),
     )
+
     const secondRevision = await Effect.runPromise(
       SecondEvidence.project(value),
     )
+
     const first = firstRevision.chunks[0]
     const second = secondRevision.chunks[0]
 
@@ -753,10 +803,12 @@ describe("defineDocumentGraph", () => {
       }),
       chunking: sectionChunking({ maximumCharacters: 128 }),
     })
+
     const duplicateGraph = defineDocumentGraph({
       id: "duplicate-test",
       documents: { Work: DuplicateSectionDocument },
     })
+
     const value = Schema.decodeSync(WorkSchema)({
       id: workId,
       title: "Challenger launch",
@@ -818,6 +870,7 @@ describe("defineDocumentGraph", () => {
         embeddingContent: [context, section.key, section.content].join(" | "),
       }],
     })
+
     const SectionScopedWorkDocument = defineDocument({
       id: WorkId,
       value: WorkSchema,
@@ -835,10 +888,12 @@ describe("defineDocumentGraph", () => {
       }),
       chunking: sectionScopedChunking({ maximumCharacters: 128 }),
     })
+
     const sectionScopedGraph = defineDocumentGraph({
       id: "section-scoped-catalog",
       documents: { Work: SectionScopedWorkDocument },
     })
+
     const value = Schema.decodeSync(WorkSchema)({
       id: workId,
       title: "Challenger launch",
@@ -898,6 +953,7 @@ describe("defineDocumentGraph", () => {
         throw new Error("custom implementation failed")
       },
     })
+
     const ThrowingWorkDocument = defineDocument({
       id: WorkId,
       value: WorkSchema,
@@ -910,10 +966,12 @@ describe("defineDocumentGraph", () => {
       }),
       chunking: throwingChunking({ maximumCharacters: 128 }),
     })
+
     const throwingGraph = defineDocumentGraph({
       id: "throwing-catalog",
       documents: { Work: ThrowingWorkDocument },
     })
+
     const value = Schema.decodeSync(WorkSchema)({
       id: workId,
       title: "Challenger launch",
@@ -976,6 +1034,7 @@ describe("defineDocumentGraph", () => {
     const StrictMetadata = Schema.Struct({
       code: Schema.String.pipe(Schema.check(Schema.isMaxLength(3))),
     })
+
     const StrictWorkDocument = defineDocument({
       id: WorkId,
       value: WorkSchema,
@@ -995,10 +1054,12 @@ describe("defineDocumentGraph", () => {
       }),
       chunking: sectionChunking({ maximumCharacters: 128 }),
     })
+
     const strictGraph = defineDocumentGraph({
       id: "strict-catalog",
       documents: { Work: StrictWorkDocument },
     })
+
     const value = Schema.decodeSync(WorkSchema)({
       id: workId,
       title: "Too long",
@@ -1079,7 +1140,7 @@ if (import.meta.url === "") {
   AgencyNode.projection("work-evidence")
 
   // @ts-expect-error The Work projection accepts the Work document value.
-  WorkEvidence.project(agencyValue)
+  void WorkEvidence.project(agencyValue)
 
   // @ts-expect-error Custom chunker configuration requires a separator.
   paragraphChunking({ maximumCharacters: 128 })

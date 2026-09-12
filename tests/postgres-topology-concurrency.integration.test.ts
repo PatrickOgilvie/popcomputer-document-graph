@@ -13,14 +13,18 @@ import {
 
 const databaseUrl = Bun.env.TEST_DATABASE_URL ??
   Bun.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
+
 const runIntegrationTests = Bun.env.RUN_DOCUMENT_GRAPH_POSTGRES_TESTS === "true" &&
   databaseUrl !== undefined
+
 const graph = "topology-concurrency"
+
 const key = (id: string) => makeDocumentKey({
   graph,
   documentKind: "Article",
   encodedId: id,
 })
+
 const replacement = (id: string, targets: ReadonlyArray<string>) => ({
   graph,
   sourceDocumentKey: key(id),
@@ -66,6 +70,7 @@ const withDatabase = async (
 ) => {
   const pool = new Pool({ connectionString: databaseUrl, max: 4 })
   const schema = `topology_${crypto.randomUUID().replaceAll("-", "")}`
+
   try {
     for (const file of [
       "0001_initial.sql",
@@ -75,8 +80,10 @@ const withDatabase = async (
       const sql = await readFile(
         new URL(`../migrations/postgres/${file}`, import.meta.url), "utf8",
       )
+
       await pool.query(sql.replaceAll('"honertia_document_graph"', `"${schema}"`))
     }
+
     await run(pool, schema)
   } finally {
     await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
@@ -89,8 +96,9 @@ describe("PostgreSQL concurrent topology", () => {
     await withDatabase(async (pool, schema) => {
       const removing = await pool.connect()
       const adding = await pool.connect()
-      const reachedCleanup = Effect.runSync(Deferred.make<void>())
-      const continueCleanup = Effect.runSync(Deferred.make<void>())
+      const reachedCleanup = Deferred.makeUnsafe<void>()
+      const continueCleanup = Deferred.makeUnsafe<void>()
+
       try {
         await removing.query("BEGIN")
         await replace(removing, schema, "A", ["B"])
@@ -98,15 +106,18 @@ describe("PostgreSQL concurrent topology", () => {
         await removing.query("BEGIN")
         await removing.query("SET LOCAL lock_timeout = 1000")
         await adding.query("BEGIN")
+
         const controlled = postgresTransactionClient({
           query: async (sql, values) => {
             if (sql.includes("AS node")) {
               Effect.runSync(Deferred.succeed(reachedCleanup, undefined))
               await Effect.runPromise(Deferred.await(continueCleanup))
             }
+
             return removing.query(sql, values === undefined ? undefined : [...values])
           },
         })
+
         const removal = replace(controlled, schema, "A", [])
         // Observe both failures and success while the publisher keeps B locked.
         const removalOutcome = Promise.allSettled([removal])
@@ -135,7 +146,9 @@ describe("PostgreSQL concurrent topology", () => {
       const first = await pool.connect()
       const second = await pool.connect()
       const [low, high] = ["A", "B"].sort((left, right) => key(left).localeCompare(key(right)))
+
       if (low === undefined || high === undefined) throw new Error("Missing topology fixtures")
+
       try {
         await first.query("BEGIN")
         await replace(first, schema, low, [])
@@ -152,12 +165,15 @@ describe("PostgreSQL concurrent topology", () => {
         const secondOutcome = Promise.allSettled([replace(second, schema, high, [low])])
         // Synchronize on an actual database lock wait, never an assumed delay.
         let blocked = false
+
         for (let attempt = 0; attempt < 100 && !blocked; attempt += 1) {
           const row = (await pool.query(
             "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked", [pid],
           )).rows[0]
+
           blocked = Schema.decodeUnknownSync(Schema.Struct({ blocked: Schema.Boolean }))(row).blocked
         }
+
         expect(blocked).toBe(true)
         await replace(first, schema, low, [high])
         await first.query("COMMIT")

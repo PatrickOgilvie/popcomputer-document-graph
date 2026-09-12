@@ -45,6 +45,7 @@ export const postgresTransactionClient = (
     [PostgresQueryClientTypeId]: true,
     query: (text, values) => client.query(text, values),
   }
+
   return Object.freeze(transactionClient)
 }
 
@@ -78,6 +79,7 @@ export type PostgresQueryable =
   | Pool
   | PoolClient
   | PostgresQueryClient
+
 export type PostgresTransactionClient =
   | Client
   | PoolClient
@@ -91,6 +93,7 @@ export const queryRows = async <Row extends QueryResultRow>(
 ): Promise<ReadonlyArray<Row>> => {
   const client: PostgresQueryExecutor = connection
   const result = await client.query(text, [...values])
+
   // SAFETY: every PostgresQueryable member resolves to a pg QueryResult
   // payload whose rows carry the caller-declared encoded shape; parseRow
   // revalidates each row before any stored state is trusted.
@@ -103,11 +106,14 @@ const withTransaction = async <A>(
 ): Promise<A> => {
   if (config.pool !== undefined) {
     const client = await config.pool.connect()
+
     try {
       await client.query("BEGIN")
+
       try {
         const value = await operation(client)
         await client.query("COMMIT")
+
         return value
       } catch (cause) {
         try {
@@ -115,6 +121,7 @@ const withTransaction = async <A>(
         } catch {
           // Preserve the failure that caused the transaction to roll back.
         }
+
         throw cause
       }
     } finally {
@@ -125,9 +132,11 @@ const withTransaction = async <A>(
   const client = config.transaction
   const savepoint = "honertia_document_graph_operation"
   await client.query(`SAVEPOINT ${savepoint}`)
+
   try {
     const value = await operation(client)
     await client.query(`RELEASE SAVEPOINT ${savepoint}`)
+
     return value
   } catch (cause) {
     try {
@@ -136,6 +145,7 @@ const withTransaction = async <A>(
     } catch {
       // Preserve the failure that caused the savepoint rollback.
     }
+
     throw cause
   }
 }

@@ -105,18 +105,21 @@ export const assertValidGraphRelations = (
         reason: "invalid_id",
       })
     }
+
     if (!Schema.is(GraphRelationVersionSchema)(relation.version)) {
       throw new InvalidGraphRelationDefinition({
         relation: id,
         reason: "invalid_version",
       })
     }
+
     if (documents[relation.from] === undefined) {
       throw new InvalidGraphRelationDefinition({
         relation: id,
         reason: "unknown_source",
       })
     }
+
     if (documents[relation.to] === undefined) {
       throw new InvalidGraphRelationDefinition({
         relation: id,
@@ -159,6 +162,7 @@ export const assertUniqueProjectionIds = (
 ): void => {
   for (const [documentKind, definition] of Object.entries(documents)) {
     const seen = new Set<string>()
+
     for (const projection of definition.projections) {
       if (seen.has(projection.id)) {
         throw new InvalidDocumentGraphDefinition({
@@ -167,6 +171,7 @@ export const assertUniqueProjectionIds = (
           projection: projection.id,
         })
       }
+
       seen.add(projection.id)
     }
   }

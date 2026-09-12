@@ -90,8 +90,10 @@ interface ProviderRetryMetadataBuilder {
 
 const parseNonNegativeDecimal = (value: string): number | undefined => {
   const canonical = value.trim()
+
   if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(canonical)) return undefined
   const parsed = Number(canonical)
+
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
@@ -102,38 +104,49 @@ const parseProviderRetryMetadata = (
 
   const metadata: ProviderRetryMetadataBuilder = {}
   const shouldRetry = headers.get("x-should-retry")
+
   if (shouldRetry === "true") metadata.providerRetryDirective = "retry"
+
   if (shouldRetry === "false") {
     metadata.providerRetryDirective = "do_not_retry"
   }
 
   const retryAfterMilliseconds = headers.get("retry-after-ms")
+
   if (retryAfterMilliseconds !== null) {
     const parsed = parseNonNegativeDecimal(retryAfterMilliseconds)
+
     if (parsed !== undefined) {
       metadata.providerRetryAfterMilliseconds = parsed
+
       return metadata
     }
   }
 
   const retryAfter = headers.get("retry-after")
+
   if (retryAfter === null) return metadata
 
   const seconds = parseNonNegativeDecimal(retryAfter)
+
   if (seconds !== undefined) {
     const milliseconds = seconds * 1_000
+
     if (Number.isFinite(milliseconds)) {
       metadata.providerRetryAfterMilliseconds = milliseconds
     }
+
     return metadata
   }
 
   const epochMilliseconds = /[A-Za-z]/.test(retryAfter)
     ? Date.parse(retryAfter)
     : Number.NaN
+
   if (Number.isFinite(epochMilliseconds)) {
     metadata.providerRetryAtEpochMilliseconds = epochMilliseconds
   }
+
   return metadata
 }
 
@@ -149,8 +162,10 @@ const classifyTransportFailure = (
       cause,
     })
   }
+
   if (cause instanceof APIError) {
     const status = cause.status
+
     return new TurbopufferTransportFailed({
       operation,
       reason: status === 401
@@ -174,6 +189,7 @@ const classifyTransportFailure = (
       cause,
     })
   }
+
   return new TurbopufferTransportFailed({
     operation,
     reason: cause instanceof Error && cause.name === "AbortError"
@@ -198,23 +214,28 @@ const withUnknownRequestOutcome = (
   error: TurbopufferTransportFailed,
 ): TurbopufferTransportFailed => {
   if (error.requestOutcome === "unknown") return error
+
   const fields: UnknownOutcomeTransportFailureFields = {
     operation: error.operation,
     reason: error.reason,
     requestOutcome: "unknown",
     cause: error.cause,
   }
+
   if (error.providerRetryDirective !== undefined) {
     fields.providerRetryDirective = error.providerRetryDirective
   }
+
   if (error.providerRetryAfterMilliseconds !== undefined) {
     fields.providerRetryAfterMilliseconds =
       error.providerRetryAfterMilliseconds
   }
+
   if (error.providerRetryAtEpochMilliseconds !== undefined) {
     fields.providerRetryAtEpochMilliseconds =
       error.providerRetryAtEpochMilliseconds
   }
+
   return new TurbopufferTransportFailed(fields)
 }
 
@@ -226,6 +247,7 @@ const retrying = <A>(
     ? effect
     : Effect.suspend(() => {
         let observedAmbiguousOutcome = false
+
         const observed = effect.pipe(
           Effect.catch((error) =>
             Effect.sync(() => {
@@ -235,6 +257,7 @@ const retrying = <A>(
             }).pipe(Effect.andThen(Effect.fail(error))),
           ),
         )
+
         return observed.pipe(
           Effect.retry({
             schedule: Schedule.exponential("100 millis").pipe(
@@ -243,6 +266,7 @@ const retrying = <A>(
               Schedule.passthrough,
               Schedule.modifyDelay(({ duration, input, now }) => {
                 const relativeDelay = input.providerRetryAfterMilliseconds
+
                 const absoluteDelay =
                   input.providerRetryAtEpochMilliseconds === undefined
                     ? undefined
@@ -250,10 +274,13 @@ const retrying = <A>(
                         0,
                         input.providerRetryAtEpochMilliseconds - now,
                       )
+
                 const providerDelay = relativeDelay ?? absoluteDelay
+
                 const combinedDelay = providerDelay === undefined
                   ? Duration.toMillis(duration)
                   : Math.max(Duration.toMillis(duration), providerDelay)
+
                 return Effect.succeed(
                   Duration.millis(
                     Math.min(
@@ -268,7 +295,9 @@ const retrying = <A>(
               if (error.providerRetryDirective === "do_not_retry") {
                 return false
               }
+
               if (error.providerRetryDirective === "retry") return true
+
               return Schema.is(RetryableTransportReasonSchema)(error.reason)
             },
           }),
@@ -290,6 +319,7 @@ const checkedInteger = (
       reason: "invalid_value",
     })
   }
+
   return value
 }
 
@@ -307,8 +337,9 @@ const unwrapCanonicalApiKey = (
   if (!Redacted.isRedacted(apiKey)) {
     throw invalidApiKey()
   }
+
   try {
-    return Schema.decodeUnknownSync(TurbopufferApiKeySchema)(
+    return Schema.decodeSync(TurbopufferApiKeySchema)(
       Redacted.value(apiKey),
     )
   } catch {
@@ -323,12 +354,15 @@ export const makeOfficialTurbopufferClient = (
   const partition = validateTurbopufferWorkspacePartition(config.partition)
   const namespace = partition.namespace
   const retries = checkedInteger(config.retries ?? 2, "retries", 0)
+
   const timeout = checkedInteger(
     config.timeoutMilliseconds ?? 60_000,
     "timeout_milliseconds",
     1,
   )
+
   const apiKey = unwrapCanonicalApiKey(config.apiKey)
+
   const clientOptions: ClientOptions = {
     apiKey,
     defaultNamespace: namespace,
@@ -339,6 +373,7 @@ export const makeOfficialTurbopufferClient = (
     timeout,
     logLevel: "off",
   }
+
   if (partition.endpoint._tag === "Region") {
     clientOptions.region = partition.endpoint.region
     // The SDK otherwise falls back to TURBOPUFFER_BASE_URL, which could route
@@ -350,6 +385,7 @@ export const makeOfficialTurbopufferClient = (
     // custom endpoint depend on ambient process configuration.
     clientOptions.region = null
   }
+
   if (config.fetch !== undefined) clientOptions.fetch = config.fetch
   const client = new Turbopuffer(clientOptions)
   const remote = client.namespace(namespace)

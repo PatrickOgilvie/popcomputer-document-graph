@@ -19,7 +19,9 @@ import { inMemoryDocumentGraph } from "../src/in-memory.js"
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("InMemoryArticleId"),
 )
+
 const Visibility = Schema.Literals(["public", "private"])
+
 const Article = Schema.Struct({
   id: ArticleId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -31,6 +33,7 @@ const Article = Schema.Struct({
     }),
   ),
 })
+
 const ArticleMetadata = Schema.Struct({ visibility: Visibility })
 
 const ArticleDocument = defineDocument({
@@ -43,6 +46,7 @@ const ArticleDocument = defineDocument({
   metadata: ArticleMetadata,
   select: (article) => {
     const [first, ...rest] = article.sections
+
     return {
       context: article.title,
       sections: [
@@ -66,12 +70,15 @@ const graph = defineDocumentGraph({
   id: "in-memory-test",
   documents: { Article: ArticleDocument },
 })
+
 const ArticleNode = graph.document("Article")
+
 const ArticleContent = ArticleNode.projection("article-content")
 
 const articleId = Schema.decodeSync(ArticleId)(
   "88888888-8888-4888-8888-888888888888",
 )
+
 const profile = defineEmbeddingProfile({
   id: "test:in-memory",
   version: "v1",
@@ -89,10 +96,12 @@ const makeArticle = (
 
 const makeEmbeddings = () => {
   const batches: Array<ReadonlyArray<string>> = []
+
   const service: EmbeddingProviderService = {
     profile,
     embedDocuments: (requests) => {
       batches.push(requests.map((request) => request.content))
+
       return Effect.succeed(
         requests.map((request) => ({
           contentHash: request.contentHash,
@@ -129,6 +138,7 @@ describe("inMemoryDocumentGraph", () => {
   test("runs scoped text search without an embedding provider", async () => {
     const embeddings = makeEmbeddings()
     const storage = inMemoryDocumentGraph()
+
     const article = makeArticle([
       {
         id: "private",
@@ -166,6 +176,7 @@ describe("inMemoryDocumentGraph", () => {
   test("applies composable Boolean filters before text candidate limiting", async () => {
     const embeddings = makeEmbeddings()
     const storage = inMemoryDocumentGraph()
+
     const article = makeArticle([
       {
         id: "private",
@@ -184,6 +195,7 @@ describe("inMemoryDocumentGraph", () => {
         yield* ArticleContent.index(article).pipe(
           Effect.provideService(EmbeddingProvider, embeddings.service),
         )
+
         const eitherVisibility = yield* ArticleContent.search("national", {
           strategy: "text",
           where: (filter) =>
@@ -194,6 +206,7 @@ describe("inMemoryDocumentGraph", () => {
           candidates: { text: 2 },
           limit: 2,
         })
+
         const publicOnly = yield* ArticleContent.search("national", {
           strategy: "text",
           where: (filter) =>
@@ -207,6 +220,7 @@ describe("inMemoryDocumentGraph", () => {
           candidates: { text: 1 },
           limit: 1,
         })
+
         return { eitherVisibility, publicOnly }
       }).pipe(Effect.provide(storage)),
     )
@@ -222,10 +236,12 @@ describe("inMemoryDocumentGraph", () => {
   test("prefilters retrieval and atomically removes stale chunks", async () => {
     const embeddings = makeEmbeddings()
     const storage = inMemoryDocumentGraph()
+
     const live = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings.service),
       storage,
     )
+
     const initial = makeArticle([
       {
         id: "private",
@@ -238,6 +254,7 @@ describe("inMemoryDocumentGraph", () => {
         visibility: "public",
       },
     ])
+
     const updated = makeArticle([
       {
         id: "public",
@@ -245,9 +262,11 @@ describe("inMemoryDocumentGraph", () => {
         visibility: "public",
       },
     ])
+
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const firstIndex = yield* ArticleContent.index(initial)
+
         const publicHits = yield* ArticleContent.search(
           "national distribution",
           {
@@ -257,6 +276,7 @@ describe("inMemoryDocumentGraph", () => {
             limit: 1,
           },
         )
+
         const allHits = yield* graph.search("national distribution")
         const secondIndex = yield* ArticleContent.index(updated)
         const afterUpdate = yield* graph.search("national distribution")
@@ -317,10 +337,12 @@ describe("inMemoryDocumentGraph", () => {
 
   test("hides and prunes projections removed from the graph schema", async () => {
     const embeddings = makeEmbeddings()
+
     const live = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings.service),
       inMemoryDocumentGraph(),
     )
+
     const article = makeArticle([
       {
         id: "public",
@@ -328,6 +350,7 @@ describe("inMemoryDocumentGraph", () => {
         visibility: "public",
       },
     ])
+
     const revision = await Effect.runPromise(
       ArticleContent.project(article),
     )
@@ -359,10 +382,12 @@ describe("inMemoryDocumentGraph", () => {
 
         const hiddenBeforePrune = yield* graph.search("national")
         const pruned = yield* graph.reconcileIndex()
+
         const [storedAfterPrune] = yield* store.loadRevisions([{
           documentKey: revision.documentKey,
           projection: "retired-projection",
         }])
+
         return { hiddenBeforePrune, pruned, storedAfterPrune }
       }).pipe(Effect.provide(live)),
     )
@@ -381,10 +406,12 @@ describe("inMemoryDocumentGraph", () => {
 
   test("rejects replacement with a stale optimistic token", async () => {
     const embeddings = makeEmbeddings()
+
     const live = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings.service),
       inMemoryDocumentGraph(),
     )
+
     const article = makeArticle([
       {
         id: "public",
@@ -392,10 +419,13 @@ describe("inMemoryDocumentGraph", () => {
         visibility: "public",
       },
     ])
+
     const revision = await Effect.runPromise(
       ArticleContent.project(article),
     )
+
     const [firstChunk, ...remainingChunks] = revision.chunks
+
     const chunks: readonly [
       ProjectedChunkRecord,
       ...ReadonlyArray<ProjectedChunkRecord>,
@@ -408,6 +438,7 @@ describe("inMemoryDocumentGraph", () => {
       Effect.gen(function*() {
         yield* ArticleContent.index(article)
         const store = yield* ProjectionIndexStore
+
         return yield* store
           .replaceRevision({
             key: {
@@ -445,10 +476,13 @@ describe("inMemoryDocumentGraph", () => {
         visibility: "public",
       },
     ])
+
     const revision = await Effect.runPromise(
       ArticleContent.project(article),
     )
+
     const [firstChunk, ...remainingChunks] = revision.chunks
+
     const chunks: readonly [
       ProjectedChunkRecord,
       ...ReadonlyArray<ProjectedChunkRecord>,
@@ -460,6 +494,7 @@ describe("inMemoryDocumentGraph", () => {
     const result = await Effect.runPromise(
       Effect.gen(function*() {
         const store = yield* ProjectionIndexStore
+
         return yield* store
           .replaceRevision({
             key: {
@@ -503,15 +538,20 @@ describe("inMemoryDocumentGraph", () => {
         visibility: "public",
       },
     ])
+
     const revision = await Effect.runPromise(
       ArticleContent.project(article),
     )
+
     const [firstChunk, secondChunk] = revision.chunks
+
     if (secondChunk === undefined) {
       throw new Error("The two-section fixture must project two chunks")
     }
+
     const first = projectChunkRecord(firstChunk)
     const second = projectChunkRecord(secondChunk)
+
     const replacement = {
       key: {
         documentKey: revision.documentKey,
@@ -530,18 +570,21 @@ describe("inMemoryDocumentGraph", () => {
       Effect.gen(function*() {
         const projections = yield* ProjectionIndexStore
         const topology = yield* GraphTopologyStore
+
         const duplicateOrdinal = yield* projections
           .replaceRevision({
             ...replacement,
             chunks: [first, { ...second, ordinal: first.ordinal }],
           })
           .pipe(Effect.result)
+
         const blankContent = yield* projections
           .replaceRevision({
             ...replacement,
             chunks: [{ ...first, content: " " }],
           })
           .pipe(Effect.result)
+
         const mismatchedSource = yield* topology
           .replaceDocumentTopology({
             graph: revision.encodedTarget.graph,
@@ -589,14 +632,17 @@ describe("inMemoryDocumentGraph", () => {
 
   test("keeps state isolated between separately created Layers", async () => {
     const embeddings = makeEmbeddings()
+
     const firstLive = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings.service),
       inMemoryDocumentGraph(),
     )
+
     const secondLive = Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, embeddings.service),
       inMemoryDocumentGraph(),
     )
+
     const article = makeArticle([
       {
         id: "public",
@@ -608,6 +654,7 @@ describe("inMemoryDocumentGraph", () => {
     await Effect.runPromise(
       ArticleContent.index(article).pipe(Effect.provide(firstLive)),
     )
+
     const secondHits = await Effect.runPromise(
       graph
         .search("national distribution")

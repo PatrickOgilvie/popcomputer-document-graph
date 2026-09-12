@@ -3,7 +3,7 @@ import type {
   NamespaceWriteParams,
 } from "@turbopuffer/turbopuffer"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Match, Option, Schema } from "effect"
 import {
   ChunkIdSchema,
   ContentHashSchema,
@@ -47,21 +47,25 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 2,
 })
+
 const deployment = {
   deploymentId: "test:turbopuffer-publication",
   endpoint: { _tag: "Region" as const, region: "gcp-us-central1" },
 }
+
 const partition = makeTurbopufferWorkspacePartition({
   ...deployment,
   workspace: "publication-tests",
   embeddingProfile: profile,
   schemaGeneration: 1,
 })
+
 const documentKey = makeDocumentKey({
   graph: "contracts",
   documentKind: "contract",
   encodedId: { id: "contract-1" },
 })
+
 const revisionHash = Schema.decodeSync(ProjectionRevisionHashSchema)(
   "a".repeat(64),
 )
@@ -96,6 +100,7 @@ const replacement = (input?: {
   readonly embeddings?: ReplaceProjectedRevision["embeddings"]
 }): ReplaceProjectedRevision => {
   const first = chunk(0, contentHash("b"))
+
   return {
     key: { documentKey, projection: "search" },
     expectedToken: Option.none(),
@@ -201,10 +206,12 @@ const makeHarness = (input?: {
                 : "delete",
             }),
       }
+
       return { key, head: Option.some(head) }
     })),
     beginPublication: (intent) => {
       beginIntents.push(intent)
+
       if (pending !== undefined) {
         if (
           pending.intent.mutationId === intent.mutationId &&
@@ -215,12 +222,14 @@ const makeHarness = (input?: {
             intent,
           } })
         }
+
         return Effect.fail(new ProjectionPublicationCoordinatorFailed({
           operation: "begin_publication",
           reason: "publication_in_progress",
           cause: "A different publication is already pending",
         }))
       }
+
       if (!injectedSupersededPublication &&
         input?.supersededSlotHighWaterBeforeFirstBegin !== undefined) {
         injectedSupersededPublication = true
@@ -230,6 +239,7 @@ const makeHarness = (input?: {
         )
         lastAllocatedGeneration += 1
       }
+
       if (slotHighWater > intent.slotHighWater) {
         return Effect.fail(new ProjectionPublicationPlanStale({
           documentKey: intent.key.documentKey,
@@ -238,6 +248,7 @@ const makeHarness = (input?: {
           currentSlotHighWater: slotHighWater,
         }))
       }
+
       slotHighWater = intent.slotHighWater
       lastAllocatedGeneration += 1
       pending = {
@@ -250,24 +261,30 @@ const makeHarness = (input?: {
         )(lastAllocatedGeneration),
         slotHighWater: intent.slotHighWater,
       }
+
       return Effect.succeed({ _tag: "Publish", lease: pending })
     },
     finalizePublication: (lease) => {
       finalized.push(lease)
+
       if (remainingFinalizeFailures > 0) {
         remainingFinalizeFailures -= 1
+
         return Effect.fail(new ProjectionPublicationCoordinatorFailed({
           operation: "finalize_publication",
           reason: "unavailable",
           cause: "simulated D1 outage",
         }))
       }
+
       pending = undefined
+
       return Effect.succeed(outcomeFor(lease))
     },
     supersedePublication: (lease) => {
       superseded.push(lease)
       pending = undefined
+
       return Effect.void
     },
     listStaleRevisions: () => Effect.succeed([]),
@@ -278,10 +295,13 @@ const makeHarness = (input?: {
     query: (request) => {
       queries.push(request)
       const attributes = request.include_attributes
+
       if (Array.isArray(attributes) &&
         attributes.includes("publication_id")) {
         if (input?.omitMarkerRowsField === true) return Effect.succeed({})
+
         if (pending === undefined) return Effect.succeed({ rows: [] })
+
         return Effect.succeed({
           rows: [{
             row_kind: "marker",
@@ -294,12 +314,15 @@ const makeHarness = (input?: {
           }],
         })
       }
+
       if (input?.omitReusableRowsField === true) return Effect.succeed({})
+
       return Effect.succeed({ rows: input?.reusableRows ?? [] })
     },
     write: (request) => {
       writes.push(request)
       const behavior = input?.writeBehaviors?.[writes.length - 1] ?? input?.writeBehavior
+
       if (behavior === "rejected") {
         return Effect.fail(new TurbopufferTransportFailed({
           operation: "write",
@@ -308,6 +331,7 @@ const makeHarness = (input?: {
           cause: "simulated definite rejection",
         }))
       }
+
       if (behavior === "ambiguous_rejection") {
         return Effect.fail(new TurbopufferTransportFailed({
           operation: "write",
@@ -316,6 +340,7 @@ const makeHarness = (input?: {
           cause: "an earlier write attempt had an ambiguous outcome",
         }))
       }
+
       if (behavior === "authentication_failed") {
         return Effect.fail(new TurbopufferTransportFailed({
           operation: "write",
@@ -324,6 +349,7 @@ const makeHarness = (input?: {
           cause: "simulated authentication rejection",
         }))
       }
+
       if (behavior === "timed_out") {
         return Effect.fail(new TurbopufferTransportFailed({
           operation: "write",
@@ -331,14 +357,16 @@ const makeHarness = (input?: {
           cause: "simulated ambiguous timeout",
         }))
       }
+
       const rows = request.upsert_rows?.length ?? 0
+
       return Effect.succeed({
         status: "OK",
-        rows_affected: behavior === "partial"
-          ? 1
-          : behavior === "zero"
-            ? 0
-            : rows,
+        rows_affected: Match.value(behavior).pipe(
+          Match.when("partial", () => 1),
+          Match.when("zero", () => 0),
+          Match.orElse(() => rows),
+        ),
       })
     },
     multiQuery: () => Effect.die("Unexpected multi-query"),
@@ -362,6 +390,7 @@ const activeRevision = (
   chunks: ReplaceProjectedRevision["chunks"],
 ): IndexedRevisionSnapshot => {
   const [first, ...rest] = chunks
+
   return {
     token: Schema.decodeSync(IndexRevisionTokenSchema)("active-token"),
     revisionHash,
@@ -403,10 +432,12 @@ describe("Turbopuffer projection publication", () => {
     const input = replacement()
     const harness = makeHarness({ currentRevision: activeRevision(input.chunks) })
     const store = await makeStore(harness)
+
     const commit = await Effect.runPromise(store.replaceRevision({
       ...input,
       expectedToken: Option.some(activeRevision(input.chunks).token),
     }))
+
     expect(commit).toMatchObject({ inserted: 0, updated: 1, deleted: 0 })
     expect(harness.queries).toHaveLength(0)
     const live = harness.writes[0]?.upsert_rows?.find((row) => row["is_live"] === true)
@@ -433,6 +464,7 @@ describe("Turbopuffer projection publication", () => {
 
   test("rejects a D1 coordinator wired to another physical partition", async () => {
     const harness = makeHarness()
+
     const mismatched: PublicationHarness = {
       ...harness,
       coordinator: {
@@ -529,6 +561,7 @@ describe("Turbopuffer projection publication", () => {
     const harness = makeHarness({
       supersededSlotHighWaterBeforeFirstBegin: 4,
     })
+
     const store = await makeStore(harness, {
       maximumSlotsPerRevision: 3,
     })
@@ -585,6 +618,7 @@ describe("Turbopuffer projection publication", () => {
         writeBehavior: "timed_out",
         ...input,
       })
+
       const store = await makeStore(harness)
 
       await expect(
@@ -603,6 +637,7 @@ describe("Turbopuffer projection publication", () => {
       writeBehavior: "timed_out",
       omitMarkerRowsField: true,
     })
+
     const store = await makeStore(harness)
 
     await expect(
@@ -657,6 +692,7 @@ describe("Turbopuffer projection publication", () => {
       supersededSlotHighWaterBeforeFirstBegin: 3,
       finalizeFailures: 1,
     })
+
     const store = await makeStore(harness)
     const command = replacement()
 
@@ -691,6 +727,7 @@ describe("Turbopuffer projection publication", () => {
       slotHighWater: 3,
       writeBehavior: "partial",
     })
+
     const store = await makeStore(harness)
 
     await expect(
@@ -784,6 +821,7 @@ describe("Turbopuffer projection publication", () => {
     const harness = makeHarness({
       supersededSlotHighWaterBeforeFirstBegin: 3,
     })
+
     const store = await makeStore(harness)
 
     const deletion = await Effect.runPromise(store.deleteRevision({
@@ -804,6 +842,7 @@ describe("Turbopuffer projection publication", () => {
     const sharedHash = contentHash("c")
     const chunks = [chunk(0, sharedHash), chunk(1, sharedHash)] as const
     const currentRevision = activeRevision(chunks)
+
     const harness = makeHarness({
       currentRevision,
       reusableRows: [
@@ -811,9 +850,11 @@ describe("Turbopuffer projection publication", () => {
         { content_hash: sharedHash, vector: [0.5, 0.5] },
       ],
     })
+
     const store = await makeStore(harness)
 
     const command = replacement({ chunks, embeddings: [] })
+
     const commit = await Effect.runPromise(store.replaceRevision({
       ...command,
       expectedToken: Option.some(currentRevision.token),
@@ -844,10 +885,12 @@ describe("Turbopuffer projection publication", () => {
     const currentRevision = activeRevision([
       chunk(0, contentHash("e")),
     ])
+
     const harness = makeHarness({
       currentRevision,
       omitReusableRowsField: true,
     })
+
     const store = await makeStore(harness)
 
     await expect(
@@ -870,6 +913,7 @@ describe("Turbopuffer projection publication", () => {
     const sharedHash = contentHash("d")
     const chunks = [chunk(0, sharedHash), chunk(1, sharedHash)] as const
     const currentRevision = activeRevision(chunks)
+
     const harness = makeHarness({
       currentRevision,
       reusableRows: [
@@ -877,6 +921,7 @@ describe("Turbopuffer projection publication", () => {
         { content_hash: sharedHash, vector: [0.75, 0.25] },
       ],
     })
+
     const store = await makeStore(harness)
 
     const command = replacement({ chunks, embeddings: [] })

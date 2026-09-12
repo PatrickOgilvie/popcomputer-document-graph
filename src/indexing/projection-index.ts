@@ -151,15 +151,19 @@ export const planProjectedRevisionReplacement = (
 
   for (const chunk of replacement.chunks) {
     const sectionPart = `${chunk.sectionKey}\u0000${chunk.sectionPart}`
+
     if (chunkIds.has(chunk.chunkId)) {
       return Result.fail("duplicate_chunk_id")
     }
+
     if (ordinals.has(chunk.ordinal)) {
       return Result.fail("duplicate_ordinal")
     }
+
     if (sectionParts.has(sectionPart)) {
       return Result.fail("duplicate_section_part")
     }
+
     if (
       !Number.isInteger(chunk.ordinal) ||
       !Number.isInteger(chunk.sectionIndex) ||
@@ -170,6 +174,7 @@ export const planProjectedRevisionReplacement = (
     ) {
       return Result.fail("invalid_chunk_position")
     }
+
     if (
       chunk.content.trim().length === 0 ||
       chunk.embeddingContent.trim().length === 0
@@ -185,13 +190,16 @@ export const planProjectedRevisionReplacement = (
 
   const vectors = new Map(reusableVectors)
   const supplied = new Set<ContentHash>()
+
   for (const embedding of replacement.embeddings) {
     if (supplied.has(embedding.contentHash)) {
       return Result.fail("duplicate_embedding")
     }
+
     if (!expectedContent.has(embedding.contentHash)) {
       return Result.fail("unexpected_embedding")
     }
+
     if (
       !isValidEmbeddingVector(
         embedding.vector,
@@ -228,11 +236,13 @@ export const countProjectedRevisionReplacement = (
   next: ReadonlySet<ChunkId>,
 ): Omit<ProjectionIndexCommit, "token"> => {
   let updated = 0
+
   for (const chunkId of next) {
     if (previous.has(chunkId)) updated += 1
   }
 
   let deleted = 0
+
   for (const chunkId of previous) {
     if (!next.has(chunkId)) deleted += 1
   }
@@ -486,6 +496,7 @@ const snapshotProvesRevision = (
   }
 
   const storedContentByChunk = new Map<ChunkId, ContentHash>()
+
   for (const chunk of snapshot.chunks) {
     if (storedContentByChunk.has(chunk.chunkId)) return false
     storedContentByChunk.set(chunk.chunkId, chunk.contentHash)
@@ -512,10 +523,12 @@ export const indexProjectedRevision: (
 > = Effect.fn("ProjectionIndex.indexRevision")(function*(revision) {
     const embeddings = yield* EmbeddingProvider
     const store = yield* ProjectionIndexStore
+
     const key: ProjectionIndexKey = {
       documentKey: revision.documentKey,
       projection: revision.projection.id,
     }
+
     const [lookup] = yield* store.loadRevisions([key])
     const current = lookup?.revision ?? Option.none()
 
@@ -534,6 +547,7 @@ export const indexProjectedRevision: (
     }
 
     const reusableContent = new Set<ContentHash>()
+
     if (
       Option.isSome(current) &&
       embeddingProfilesEqual(
@@ -548,6 +562,7 @@ export const indexProjectedRevision: (
 
     const embeddingRequests = new Map<ContentHash, EmbeddingRequest>()
     let reusedChunks = 0
+
     for (const chunk of revision.chunks) {
       if (reusableContent.has(chunk.contentHash)) {
         reusedChunks += 1
@@ -561,6 +576,7 @@ export const indexProjectedRevision: (
     }
 
     const requests = Array.from(embeddingRequests.values())
+
     const embeddingEffect = !EffectArray.isReadonlyArrayNonEmpty(requests)
       ? Effect.succeed<ReadonlyArray<EmbeddedContent>>([])
       : embeddings.embedDocuments(requests).pipe(
@@ -572,6 +588,7 @@ export const indexProjectedRevision: (
             ),
           ),
         )
+
     const embeddedContent = yield* embeddingEffect
 
     const commit = yield* store.replaceRevision({

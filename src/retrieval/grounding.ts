@@ -61,17 +61,16 @@ export const hydrateGrounding = (
 > =>
   Effect.gen(function*() {
     const hydrator = yield* GroundingHydrator
+
     const payload = yield* hydrator.hydrate({
       hit,
       level: input.level,
     })
 
     if (payload.content.trim().length === 0) {
-      return yield* Effect.fail(
-        new GroundingHydrationFailed({
-          reason: "invalid_output",
-        }),
-      )
+      return yield* new GroundingHydrationFailed({
+        reason: "invalid_output",
+      })
     }
 
     return {

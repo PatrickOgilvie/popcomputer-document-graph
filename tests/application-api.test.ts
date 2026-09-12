@@ -3,15 +3,16 @@ import { Effect, Result, Schema } from "effect"
 import {
   defineDocument,
   defineDocumentGraph,
-  EmbeddingProvider,
+  type EmbeddingProvider,
   InvalidVectorProjectionOutput,
-  ProjectionTextSearchStore,
+  type ProjectionTextSearchStore,
   type DocumentGraphServices,
   type SearchDocumentGraphError,
 } from "../src/index.js"
-import { ProjectionSearchStore } from "../src/adapter.js"
+import type { ProjectionSearchStore } from "../src/adapter.js"
 
 const ArticleId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("ApplicationArticleId"))
+
 const Article = Schema.Struct({
   id: ArticleId,
   title: Schema.Trimmed.check(Schema.isNonEmpty()),
@@ -39,10 +40,12 @@ const graph = defineDocumentGraph({
 const CollectionId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("ApplicationCollectionId"),
 )
+
 const Collection = Schema.Struct({
   id: CollectionId,
   entries: Schema.Array(Schema.Trimmed.check(Schema.isNonEmpty())),
 })
+
 const CollectionDocument = defineDocument(Collection, {
   id: "id",
 }).vectorise({
@@ -55,10 +58,12 @@ const CollectionDocument = defineDocument(Collection, {
     })),
   }),
 })
+
 const collectionGraph = defineDocumentGraph({
   id: "collection-api",
   documents: { Collection: CollectionDocument },
 })
+
 const collectionId = Schema.decodeSync(CollectionId)(
   "11111111-1111-4111-8111-111111111111",
 )
@@ -154,11 +159,13 @@ describe("application API", () => {
 
 if (import.meta.url === "") {
   type AppEffectServices = DocumentGraphServices
+
   const searchAction: Effect.Effect<
     unknown,
     SearchDocumentGraphError,
     AppEffectServices
   > = graph.search("query")
+
   void searchAction
 
   const textSearchAction: Effect.Effect<
@@ -169,6 +176,7 @@ if (import.meta.url === "") {
     .document("Article")
     .projection("article-content")
     .search("query", { strategy: "text" })
+
   void textSearchAction
 
   const semanticSearchAction: Effect.Effect<
@@ -179,6 +187,7 @@ if (import.meta.url === "") {
     .document("Article")
     .projection("article-content")
     .search("query", { strategy: "semantic" })
+
   void semanticSearchAction
 
   const hybridSearchAction: Effect.Effect<
@@ -197,6 +206,7 @@ if (import.meta.url === "") {
       candidates: { semantic: 60, text: 40 },
       limit: 12,
     })
+
   void hybridSearchAction
 
   // @ts-expect-error The application facade has no inert graph version.
@@ -209,7 +219,7 @@ if (import.meta.url === "") {
   void graph.scope
 
   // @ts-expect-error Graph-wide filters infer registered document kinds.
-  graph.search("query", { include: ["Unknown"] })
+  void graph.search("query", { include: ["Unknown"] })
 
   defineDocument(Article, { id: "id" }).vectorise({
     id: "invalid-text-field",

@@ -39,22 +39,27 @@ const profile = defineEmbeddingProfile({
   version: "v1",
   dimensions: 3,
 })
+
 const deployment = {
   deploymentId: "test:turbopuffer-query-compiler",
   endpoint: { _tag: "Region" as const, region: "gcp-us-central1" },
 }
+
 const partition = makeTurbopufferWorkspacePartition({
   ...deployment,
   workspace: "query-compiler-tests",
   embeddingProfile: profile,
   schemaGeneration: 2,
 })
+
 const candidates = Schema.decodeSync(SearchResultCountSchema)(25)
+
 const firstDocument = makeDocumentKey({
   graph: "contracts",
   documentKind: "contract",
   encodedId: "first",
 })
+
 const secondDocument = makeDocumentKey({
   graph: "contracts",
   documentKind: "contract",
@@ -79,6 +84,7 @@ describe("Turbopuffer query compiler", () => {
       type: "string",
       filterable: true,
     })
+
     for (const attribute of TurbopufferFilterableAttributes) {
       expect(manifest.attributes[attribute]).toMatchObject({
         filterable: true,
@@ -121,6 +127,7 @@ describe("Turbopuffer query compiler", () => {
         metadataNot(metadataEquals("private", true)),
       ),
     )
+
     const scope = makeGraphSearchScope(
       "contracts",
       {
@@ -138,10 +145,12 @@ describe("Turbopuffer query compiler", () => {
         },
       ],
     )
+
     const policy = parseTextSearchPolicy({
       language: "english",
       weights: { context: 2, label: 3, content: 1 },
     })
+
     if (policy === "disabled") throw new Error("Expected enabled text fixture")
 
     const compiled = compileTurbopufferHybridQuery({
@@ -155,6 +164,7 @@ describe("Turbopuffer query compiler", () => {
     })
 
     expect(compiled._tag).toBe("MultiQuery")
+
     if (compiled._tag !== "MultiQuery") return
 
     expect(compiled.request).not.toHaveProperty("rerank_by")
@@ -200,6 +210,7 @@ describe("Turbopuffer query compiler", () => {
     const scope = makeGraphSearchScope("contracts", {
       target: noDocuments(),
     })
+
     expect(
       compileTurbopufferSemanticQuery({
         scope,

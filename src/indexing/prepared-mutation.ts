@@ -40,7 +40,7 @@ import {
 import {
   IndexRevisionTokenSchema,
   planProjectedRevisionReplacement,
-  ProjectionIndexConflict,
+  type ProjectionIndexConflict,
   ProjectionIndexStore,
   ProjectionIndexStoreFailed,
   type ProjectionIndexCommit,
@@ -98,8 +98,7 @@ export const PreparedGraphMutationArtifactSchemaVersion = 1
 
 const PreparedGraphMutationTextPolicyArtifactSchema = Schema.Union([
   Schema.Literal("disabled"),
-  Schema.Struct({
-    _tag: Schema.Literal("TextSearch"),
+  Schema.TaggedStruct("TextSearch", {
     language: TextSearchLanguageSchema,
     weights: Schema.Struct({
       context: TextSearchWeightSchema,
@@ -116,9 +115,8 @@ const PreparedGraphMutationReferenceArtifactSchema = Schema.Struct({
 })
 
 const PreparedGraphMutationMetadataArtifactSchema = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("None") }),
-  Schema.Struct({
-    _tag: Schema.Literal("Some"),
+  Schema.TaggedStruct("None", {}),
+  Schema.TaggedStruct("Some", {
     value: JsonValueSchema,
   }),
 ])
@@ -140,8 +138,7 @@ const PreparedGraphMutationChunkArtifactSchema = Schema.Struct({
   metadata: PreparedGraphMutationMetadataArtifactSchema,
 })
 
-const PreparedGraphMutationProjectionArtifactSchema = Schema.Struct({
-  _tag: Schema.Literal("ReplaceProjectedRevision"),
+const PreparedGraphMutationProjectionArtifactSchema = Schema.TaggedStruct("ReplaceProjectedRevision", {
   input: Schema.Struct({
     key: Schema.Struct({
       documentKey: DocumentKeySchema,
@@ -169,8 +166,7 @@ const PreparedGraphMutationProjectionArtifactSchema = Schema.Struct({
   }),
 })
 
-const PreparedGraphMutationTopologyArtifactSchema = Schema.Struct({
-  _tag: Schema.Literal("ReplaceOutgoingGraphRelations"),
+const PreparedGraphMutationTopologyArtifactSchema = Schema.TaggedStruct("ReplaceOutgoingGraphRelations", {
   input: Schema.Struct({
     graph: Schema.String,
     sourceDocumentKey: DocumentKeySchema,
@@ -278,9 +274,11 @@ const encodeJsonPrimitive = (
   value: null | boolean | number | string,
 ): string => {
   const encoded = JSON.stringify(value)
+
   if (encoded === undefined) {
     throw new Error("A JSON primitive unexpectedly failed to encode")
   }
+
   return encoded
 }
 
@@ -289,21 +287,25 @@ const canonicalJsonValue = (value: JsonValue): string => {
   if (Schema.is(JsonPrimitiveSchema)(value)) {
     return encodeJsonPrimitive(value)
   }
+
   if (Array.isArray(value)) {
     return `[${value.map(canonicalJsonValue).join(",")}]`
   }
 
   // SAFETY: JsonValue contains only primitives, arrays, and string-keyed records.
   const record = value as Readonly<Record<string, JsonValue>>
+
   return `{${Object.keys(record)
     .sort()
     .map((key) => {
       const item = record[key]
+
       if (item === undefined) {
         throw new Error(
           "A parsed JSON object unexpectedly contained undefined",
         )
       }
+
       return `${encodeJsonPrimitive(key)}:${canonicalJsonValue(item)}`
     })
     .join(",")}}`
@@ -319,9 +321,11 @@ const freezeJsonValue = (value: JsonValue): JsonValue => {
   }
 
   const record: Record<string, JsonValue> = {}
+
   for (const [key, item] of Object.entries(value)) {
     record[key] = freezeJsonValue(item)
   }
+
   return Object.freeze(record)
 }
 
@@ -359,14 +363,18 @@ const freezeProjectionReplacement = (
   replacement: ReplaceProjectedRevision,
 ): ReplaceProjectedRevision => {
   const [firstChunk, ...remainingChunks] = replacement.chunks
+
   const chunks: [ProjectedChunkRecord, ...Array<ProjectedChunkRecord>] = [
     freezeChunk(firstChunk),
     ...remainingChunks.map(freezeChunk),
   ]
+
   Object.freeze(chunks)
+
   const expectedToken = Option.isNone(replacement.expectedToken)
     ? Option.none()
     : Option.some(replacement.expectedToken.value)
+
   if (Option.isSome(expectedToken)) {
     Object.freeze(expectedToken)
   }
@@ -603,6 +611,7 @@ const validateProjectionReplacement = (
     ContentHash,
     ReadonlyArray<number>
   >()
+
   if (Option.isSome(replacement.expectedToken)) {
     for (const chunk of replacement.chunks) {
       reusableVectors.set(chunk.contentHash, [])
@@ -613,6 +622,7 @@ const validateProjectionReplacement = (
     replacement,
     reusableVectors,
   )
+
   if (Result.isFailure(plan)) {
     return Result.fail(plan.failure)
   }
@@ -622,6 +632,7 @@ const validateProjectionReplacement = (
     documentKind: replacement.encodedTarget.kind,
     encodedId: replacement.encodedTarget.id,
   })
+
   if (expectedDocumentKey !== replacement.key.documentKey) {
     return Result.fail("target_key_mismatch")
   }
@@ -646,6 +657,7 @@ const validateProjectionReplacement = (
     ) {
       return Result.fail("chunk_id_mismatch")
     }
+
     if (makeContentHash(chunk.embeddingContent) !== chunk.contentHash) {
       return Result.fail("content_hash_mismatch")
     }
@@ -658,6 +670,7 @@ const validateTopologyReplacement = (
   replacement: ReplaceOutgoingGraphRelations,
 ): Result.Result<void, string> => {
   const plan = planOutgoingGraphRelationReplacement(replacement)
+
   return Result.isFailure(plan)
     ? Result.fail(plan.failure)
     : Result.succeed(undefined)
@@ -691,11 +704,14 @@ const prepareMutation = (
   const sortedProjections = [...projections].sort((left, right) =>
     compareIdentity(projectionIdentity(left), projectionIdentity(right))
   )
+
   for (const input of sortedProjections) {
     const identity = projectionIdentity(input)
+
     if (seen.has(identity)) {
       return Result.fail(new DuplicatePreparedMutation({ identity }))
     }
+
     seen.add(identity)
     operations.push(
       Object.freeze({
@@ -708,11 +724,14 @@ const prepareMutation = (
   const sortedRelations = [...relations].sort((left, right) =>
     compareIdentity(relationIdentity(left), relationIdentity(right))
   )
+
   for (const input of sortedRelations) {
     const identity = relationIdentity(input)
+
     if (seen.has(identity)) {
       return Result.fail(new DuplicatePreparedMutation({ identity }))
     }
+
     seen.add(identity)
     operations.push(
       Object.freeze({
@@ -756,39 +775,39 @@ const prepareMutationFromArtifact = (
       if (operation._tag === "ReplaceProjectedRevision") {
         const replacement = projectionFromArtifact(operation)
         const validation = validateProjectionReplacement(replacement)
+
         if (Result.isFailure(validation)) {
-          return yield* Effect.fail(
-            invalidPreparedMutationArtifact(
-              "invalid_projection",
-              validation.failure,
-            ),
+          return yield* invalidPreparedMutationArtifact(
+            "invalid_projection",
+            validation.failure,
           )
         }
+
         projections.push(replacement)
       } else {
         const replacement = topologyFromArtifact(operation)
         const validation = validateTopologyReplacement(replacement)
+
         if (Result.isFailure(validation)) {
-          return yield* Effect.fail(
-            invalidPreparedMutationArtifact(
-              "invalid_topology",
-              validation.failure,
-            ),
+          return yield* invalidPreparedMutationArtifact(
+            "invalid_topology",
+            validation.failure,
           )
         }
+
         topologies.push(replacement)
       }
     }
 
     const prepared = prepareMutation(projections, topologies)
+
     if (Result.isFailure(prepared)) {
-      return yield* Effect.fail(
-        invalidPreparedMutationArtifact(
-          "duplicate_operation",
-          prepared.failure.identity,
-        ),
+      return yield* invalidPreparedMutationArtifact(
+        "duplicate_operation",
+        prepared.failure.identity,
       )
     }
+
     return prepared.success
   })
 
@@ -801,9 +820,11 @@ export const encodePreparedGraphMutation: (
   const artifact = yield* decodePreparedGraphMutationArtifactValue(
     mutationToArtifact(prepared),
   )
+
   const normalized = yield* prepareMutationFromArtifact(artifact)
   const canonicalArtifact = mutationToArtifact(normalized)
-  const jsonValue = yield* Schema.decodeUnknownEffect(JsonValueSchema)(
+
+  const jsonValue = yield* Schema.decodeEffect(JsonValueSchema)(
     canonicalArtifact,
     { onExcessProperty: "error" },
   ).pipe(
@@ -811,6 +832,7 @@ export const encodePreparedGraphMutation: (
       invalidPreparedMutationArtifact("invalid_shape", "not_json_safe")
     ),
   )
+
   return canonicalJsonValue(jsonValue)
 })
 
@@ -821,16 +843,14 @@ export const decodePreparedGraphMutation: (
   PreparedGraphMutation,
   InvalidPreparedGraphMutationArtifact
 > = Effect.fn("DocumentGraph.decodePreparedMutation")(function*(encoded) {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(encoded)
-  } catch {
-    return yield* Effect.fail(
+  const parsed: unknown = yield* Effect.try({
+    try: () => JSON.parse(encoded),
+    catch: () =>
       invalidPreparedMutationArtifact("invalid_json", "parse_failed"),
-    )
-  }
+  })
 
   const artifact = yield* decodePreparedGraphMutationArtifactValue(parsed)
+
   return yield* prepareMutationFromArtifact(artifact)
 })
 
@@ -871,6 +891,7 @@ const makeMutationCapture: Effect.Effect<
 
   const projections: Array<ReplaceProjectedRevision> = []
   const relations: Array<ReplaceOutgoingGraphRelations> = []
+
   let prepared:
     | Result.Result<PreparedGraphMutation, DuplicatePreparedMutation>
     | undefined
@@ -883,6 +904,7 @@ const makeMutationCapture: Effect.Effect<
         replaceRevision: (replacement) =>
           Effect.sync(() => {
             projections.push(replacement)
+
             return syntheticProjectionCommit(replacement)
           }),
         deleteRevision: () =>
@@ -898,6 +920,7 @@ const makeMutationCapture: Effect.Effect<
         replaceDocumentTopology: (replacement) =>
           Effect.sync(() => {
             relations.push(replacement)
+
             return syntheticRelationCommit(replacement)
           }),
         deleteNode: () =>
@@ -911,9 +934,8 @@ const makeMutationCapture: Effect.Effect<
   return {
     layer,
     prepare: () => {
-      if (prepared === undefined) {
-        prepared = prepareMutation(projections, relations)
-      }
+      prepared ??= prepareMutation(projections, relations)
+
       return prepared
     },
   }
@@ -935,6 +957,7 @@ export const prepareGraphMutation: <A, E, R>(
   const capturing = yield* makeMutationCapture
   const result = yield* program.pipe(Effect.provide(capturing.layer))
   const mutation = yield* Effect.fromResult(capturing.prepare())
+
   return { result, mutation }
 })
 

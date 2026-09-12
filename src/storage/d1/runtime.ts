@@ -53,7 +53,9 @@ export interface D1GraphTopologyConfig {
 // schema entry point. Keeping runtime SQL independent avoids loading an ORM
 // merely to compose the structural D1 adapter.
 const NodesTable = "\"document_graph_nodes\""
+
 const RelationsTable = "\"document_graph_relations\""
+
 const Utf8 = new TextEncoder()
 
 const NonEmptyTextSchema = Schema.Trimmed.check(Schema.isNonEmpty())
@@ -79,6 +81,7 @@ const CountRowSchema = Schema.Struct({
 })
 
 type GraphEdgeIdentityRow = typeof GraphEdgeIdentityRowSchema.Type
+
 type GraphNodeRow = typeof GraphNodeRowSchema.Type
 
 interface TargetPayload {
@@ -159,6 +162,7 @@ const parseCountRow = (input: unknown, rowKind: string): number => {
 
 const parseJson = (input: string): JsonValue => {
   let decoded: unknown
+
   try {
     decoded = JSON.parse(input)
   } catch {
@@ -177,6 +181,7 @@ const parseJson = (input: string): JsonValue => {
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- This is the D1 row boundary and immediately decodes the value with GraphNodeRowSchema.
 const parseGraphNodeRow = (input: unknown): StoredGraphNode => {
   let row: GraphNodeRow
+
   try {
     row = Schema.decodeUnknownSync(GraphNodeRowSchema)(input, {
       onExcessProperty: "error",
@@ -186,11 +191,13 @@ const parseGraphNodeRow = (input: unknown): StoredGraphNode => {
   }
 
   const encodedId = parseJson(row.encoded_document_id)
+
   const derivedKey = makeDocumentKey({
     graph: row.graph_id,
     documentKind: row.document_kind,
     encodedId,
   })
+
   if (derivedKey !== row.document_key) {
     throw invalidStoredState("D1 returned a graph node with mismatched identity")
   }
@@ -208,17 +215,21 @@ const parseGraphNodeRow = (input: unknown): StoredGraphNode => {
 
 const encodeJson = (input: JsonValue): string => {
   const encoded = JSON.stringify(input)
+
   if (encoded === undefined) {
     throw invalidStoredState("A graph document identity was not JSON encodable")
   }
+
   return encoded
 }
 
 const encodePayload = <Input>(input: Input): string => {
   const encoded = JSON.stringify(input)
+
   if (encoded === undefined) {
     throw invalidStoredState("A D1 graph topology payload was not JSON encodable")
   }
+
   return encoded
 }
 
@@ -226,9 +237,11 @@ const assertPayloadCapacity = (
   payloads: ReadonlyArray<string>,
 ): void => {
   let bytes = 0
+
   for (const payload of payloads) {
     bytes += Utf8.encode(payload).byteLength
   }
+
   if (bytes > D1_GRAPH_TOPOLOGY_MAX_MUTATION_BYTES) {
     throw new D1TopologyCapacityExceeded(
       "mutation_bytes",
@@ -244,9 +257,11 @@ const resultAt = (
   operation: string,
 ): DocumentGraphD1Result<unknown> => {
   const result = results[index]
+
   if (result === undefined) {
     throw invalidStoredState(`D1 omitted the ${operation} batch result`)
   }
+
   return result
 }
 
@@ -255,11 +270,13 @@ const replaceDocumentTopology = async (
   replacement: ReplaceOutgoingGraphRelations,
 ): Promise<GraphRelationCommit> => {
   const planned = planOutgoingGraphRelationReplacement(replacement)
+
   if (Result.isFailure(planned)) {
     throw invalidStoredState(
       `Invalid outgoing graph relation replacement: ${planned.failure}`,
     )
   }
+
   if (planned.success.edges.length > D1_GRAPH_TOPOLOGY_MAX_OUTGOING_EDGES) {
     throw new D1TopologyCapacityExceeded(
       "outgoing_edges",
@@ -270,6 +287,7 @@ const replaceDocumentTopology = async (
 
   const targetsByKey = new Map<DocumentKey, TargetPayload>()
   const edges: Array<EdgePayload> = []
+
   for (const edge of planned.success.edges) {
     targetsByKey.set(edge.target.documentKey, {
       documentKey: edge.target.documentKey,
@@ -365,19 +383,24 @@ const replaceDocumentTopology = async (
   ]
 
   const results = await database.batch<unknown>(statements)
+
   if (results.length !== statements.length) {
     throw invalidStoredState("D1 returned an incomplete replacement batch")
   }
+
   const previousRows = resultAt(results, 0, "previous-edge read").results
+
   const previous = new Set(
     previousRows.map((row) => {
       const parsed = parseEdgeIdentityRow(row)
+
       return makeGraphRelationEdgeIdentity({
         relation: parsed.relation_id,
         targetDocumentKey: parsed.target_document_key,
       })
     }),
   )
+
   return countGraphRelationReplacement(previous, planned.success.identities)
 }
 
@@ -426,18 +449,22 @@ const deleteNode = async (
        WHERE ${OrphanReferencedNodePredicate}`,
     ).bind(input.graph),
   ]
+
   const results = await database.batch<unknown>(statements)
+
   if (results.length !== statements.length) {
     throw invalidStoredState("D1 returned an incomplete node-deletion batch")
   }
 
   const relationCount = resultAt(results, 0, "edge-count read").results[0]
   const nodeCount = resultAt(results, 1, "node-count read").results[0]
+
   const referencedNodeCount = resultAt(
     results,
     4,
     "orphaned referenced-node count read",
   ).results[0]
+
   return {
     deletedRelations: parseCountRow(relationCount, "deleted edge"),
     deletedNodes: parseCountRow(nodeCount, "deleted node"),
@@ -481,6 +508,7 @@ const pruneTopology = async (
       D1_GRAPH_TOPOLOGY_MAX_REGISTERED_RELATIONS,
     )
   }
+
   const encodedRegistered = encodePayload(registeredRelationPayload(input))
   assertPayloadCapacity([encodedRegistered])
 
@@ -504,13 +532,16 @@ const pruneTopology = async (
        WHERE ${OrphanReferencedNodePredicate}`,
     ).bind(input.graph),
   ]
+
   const results = await database.batch<unknown>(statements)
+
   if (results.length !== statements.length) {
     throw invalidStoredState("D1 returned an incomplete topology-prune batch")
   }
 
   const relationCount = resultAt(results, 0, "stale-edge count").results[0]
   const nodeCount = resultAt(results, 2, "orphan-node count").results[0]
+
   return {
     deletedRelations: parseCountRow(relationCount, "stale edge"),
     deletedReferencedNodes: parseCountRow(nodeCount, "orphan node"),
@@ -541,10 +572,12 @@ const listNodes = async (
   const encodedDocumentKinds = encodePayload(input.documentKinds)
   const encodedStates = encodePayload(input.states)
   assertPayloadCapacity([encodedDocumentKinds, encodedStates])
+
   const after = Option.match(input.after, {
     onNone: () => null,
     onSome: (documentKey) => documentKey,
   })
+
   const result = await strongRead(
     database,
     `SELECT document_key, graph_id, document_kind,
@@ -570,13 +603,17 @@ const listNodes = async (
       input.limit + 1,
     ],
   )
+
   const parsed = result.results.map(parseGraphNodeRow)
+
   if (parsed.length > input.limit + 1) {
     throw invalidStoredState("D1 returned too many graph catalog rows")
   }
+
   const hasMore = parsed.length > input.limit
   const nodes = hasMore ? parsed.slice(0, input.limit) : parsed
   const last = nodes.at(-1)
+
   return {
     nodes,
     next: hasMore && last !== undefined
@@ -597,6 +634,7 @@ const findRelatedNodes = async (
   if (input.documentKeys.length === 0) return []
   const current = input.direction === "outgoing" ? "source" : "target"
   const related = input.direction === "outgoing" ? "target" : "source"
+
   const result = await strongRead(
     database,
     `SELECT requested.key AS request_ordinal,
@@ -621,24 +659,31 @@ const findRelatedNodes = async (
     [input.graph, JSON.stringify(input.documentKeys), input.documentKind, input.relation,
       input.relationVersion, input.relatedDocumentKind, input.limit],
   )
+
   const groups = input.documentKeys.map((documentKey) => ({
     documentKey,
     nodes: new Array<StoredGraphNode>(),
   }))
+
   for (const unknownRow of result.results) {
     let parsed: typeof RelatedGraphNodeRowSchema.Type
+
     try {
       parsed = Schema.decodeUnknownSync(RelatedGraphNodeRowSchema)(unknownRow, { onExcessProperty: "error" })
     } catch {
       throw invalidStoredState("D1 returned an invalid related graph node row")
     }
+
     const { request_ordinal, ...node } = parsed
     const group = groups[request_ordinal]
+
     if (group === undefined || group.nodes.length >= input.limit) {
       throw invalidStoredState("Invalid related graph node batch")
     }
+
     group.nodes.push(parseGraphNodeRow(node))
   }
+
   return groups
 }
 

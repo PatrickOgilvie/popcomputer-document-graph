@@ -44,6 +44,7 @@ const sqliteBinding = (input: unknown): SqliteBinding => {
   ) {
     return input
   }
+
   throw new TypeError("The test D1 binding received an unsupported value")
 }
 
@@ -73,15 +74,19 @@ class SqliteD1PreparedStatement implements D1PreparedStatement {
 
   executeSync<T>(): D1Result<T> {
     const bindings = this.values.map(sqliteBinding)
+
     const statement = this.database.query<unknown, Array<SqliteBinding>>(
       this.query,
     )
+
     const rows = statement.all(...bindings)
+
     const changes = this.database
       .query<{ readonly changes: number }, []>(
         "SELECT changes() AS changes",
       )
       .get()?.changes ?? 0
+
     return {
       success: true,
       // SAFETY: This fake implements D1's caller-selected row generic. The
@@ -97,12 +102,16 @@ class SqliteD1PreparedStatement implements D1PreparedStatement {
     columnName?: string,
   ): Promise<T | null> {
     const first = this.executeSync<Record<string, unknown>>().results[0]
+
     if (first === undefined) return null
+
     if (columnName === undefined) {
       // SAFETY: The D1 first<T>() API delegates selection of T to its caller.
       return first as T
     }
+
     const value = first[columnName]
+
     // SAFETY: The D1 first<T>(column) API delegates the column type to caller.
     return value === undefined ? null : value as T
   }
@@ -148,7 +157,7 @@ class SqliteD1Session implements D1DatabaseSession {
 }
 
 class SqliteD1Database implements D1Database {
-  readonly sessionConstraints: Array<D1SessionConstraint | string | undefined> = []
+  readonly sessionConstraints: Array<string | undefined> = []
 
   constructor(private readonly sqlite: Database) {
   }
@@ -161,15 +170,20 @@ class SqliteD1Database implements D1Database {
     statements: D1PreparedStatement[],
   ): Promise<D1Result<T>[]> {
     this.sqlite.exec("BEGIN IMMEDIATE")
+
     try {
       const results: Array<D1Result<T>> = []
+
       for (const statement of statements) {
         if (!(statement instanceof SqliteD1PreparedStatement)) {
           throw new TypeError("The test D1 batch received a foreign statement")
         }
+
         results.push(statement.executeSync<T>())
       }
+
       this.sqlite.exec("COMMIT")
+
       return results
     } catch (cause: unknown) {
       this.sqlite.exec("ROLLBACK")
@@ -179,13 +193,15 @@ class SqliteD1Database implements D1Database {
 
   async exec(query: string): Promise<D1ExecResult> {
     this.sqlite.exec(query)
+
     return { count: 0, duration: 0 }
   }
 
   withSession(
-    constraintOrBookmark?: D1SessionBookmark | D1SessionConstraint,
+    constraintOrBookmark?: D1SessionBookmark,
   ): D1DatabaseSession {
     this.sessionConstraints.push(constraintOrBookmark)
+
     return new SqliteD1Session(this)
   }
 
@@ -207,13 +223,16 @@ class SqliteD1Database implements D1Database {
 const makeDatabase = async (): Promise<SqliteD1Database> => {
   const sqlite = new Database(":memory:", { strict: true })
   const database = new SqliteD1Database(sqlite)
+
   const migration = await Bun.file(
     new URL(
       "../migrations/d1/0001_graph_topology.sql",
       import.meta.url,
     ),
   ).text()
+
   await database.exec(migration)
+
   return database
 }
 
@@ -223,6 +242,7 @@ const reference = (
   id: string,
 ): KeyedReference => {
   const encoded: EncodedDocumentReference = { graph, kind, id }
+
   return {
     documentKey: makeDocumentKey({
       graph,
@@ -236,12 +256,14 @@ const reference = (
 describe("d1GraphTopology", () => {
   test("satisfies the canonical topology conformance laws on SQLite", async () => {
     const database = await makeDatabase()
+
     try {
       const report = await Effect.runPromise(
         verifyGraphTopologyStoreConformance().pipe(
           Effect.provide(d1GraphTopology({ database })),
         ),
       )
+
       expect(report.capability).toBe("graph_topology")
       expect(report.verified).toHaveLength(12)
       expect(database.sessionConstraints.length).toBeGreaterThan(0)
@@ -261,6 +283,7 @@ describe("d1GraphTopology", () => {
     const firstSource = reference(graph, "Source", "first-source")
     const secondSource = reference(graph, "Source", "second-source")
     const target = reference(graph, "Target", "shared-target")
+
     const replacement = (source: KeyedReference) => ({
       graph,
       sourceDocumentKey: source.documentKey,
@@ -272,16 +295,19 @@ describe("d1GraphTopology", () => {
         targets: [target],
       }],
     })
+
     try {
       const result = await Effect.runPromise(
         Effect.gen(function*() {
           const store = yield* GraphTopologyStore
           yield* store.replaceDocumentTopology(replacement(firstSource))
           yield* store.replaceDocumentTopology(replacement(secondSource))
+
           const firstDeletion = yield* store.deleteNode({
             graph,
             documentKey: firstSource.documentKey,
           })
+
           const afterFirst = yield* store.listNodes({
             graph,
             documentKinds: [],
@@ -289,10 +315,12 @@ describe("d1GraphTopology", () => {
             after: Option.none(),
             limit: Schema.decodeSync(GraphNodePageLimitSchema)(10),
           })
+
           const secondDeletion = yield* store.deleteNode({
             graph,
             documentKey: secondSource.documentKey,
           })
+
           const afterSecond = yield* store.listNodes({
             graph,
             documentKinds: [],
@@ -300,6 +328,7 @@ describe("d1GraphTopology", () => {
             after: Option.none(),
             limit: Schema.decodeSync(GraphNodePageLimitSchema)(10),
           })
+
           return { firstDeletion, afterFirst, secondDeletion, afterSecond }
         }).pipe(Effect.provide(d1GraphTopology({ database }))),
       )
@@ -327,6 +356,7 @@ describe("d1GraphTopology", () => {
     const graph = "d1-hard-deletion-atomicity"
     const source = reference(graph, "Source", "source")
     const target = reference(graph, "Target", "target")
+
     try {
       const result = await Effect.runPromise(
         Effect.gen(function*() {
@@ -350,10 +380,12 @@ describe("d1GraphTopology", () => {
                SELECT RAISE(ABORT, 'rejected orphan collection');
              END`,
           )
+
           const deletion = yield* store.deleteNode({
             graph,
             documentKey: source.documentKey,
           }).pipe(Effect.result)
+
           const nodes = yield* store.listNodes({
             graph,
             documentKinds: [],
@@ -361,6 +393,7 @@ describe("d1GraphTopology", () => {
             after: Option.none(),
             limit: Schema.decodeSync(GraphNodePageLimitSchema)(10),
           })
+
           const related = yield* store.findRelatedNodes({
             graph,
             documentKeys: [source.documentKey],
@@ -371,6 +404,7 @@ describe("d1GraphTopology", () => {
             relatedDocumentKind: target.reference.kind,
             limit: Schema.decodeSync(GraphNeighbourLimitSchema)(10),
           }).pipe(Effect.map((groups) => groups.flatMap((group) => group.nodes)))
+
           return { deletion, nodes, related }
         }).pipe(Effect.provide(d1GraphTopology({ database }))),
       )
@@ -391,14 +425,17 @@ describe("d1GraphTopology", () => {
     const database = await makeDatabase()
     const graph = "d1-capacity"
     const source = reference(graph, "Source", "source")
+
     const targets = Array.from(
       { length: D1_GRAPH_TOPOLOGY_MAX_OUTGOING_EDGES + 1 },
       (_, index) => reference(graph, "Target", `target-${index}`),
     )
+
     try {
       const result = await Effect.runPromise(
         Effect.gen(function*() {
           const store = yield* GraphTopologyStore
+
           const replacement = yield* store.replaceDocumentTopology({
             graph,
             sourceDocumentKey: source.documentKey,
@@ -410,6 +447,7 @@ describe("d1GraphTopology", () => {
               targets,
             }],
           }).pipe(Effect.result)
+
           const page = yield* store.listNodes({
             graph,
             documentKinds: [],
@@ -417,14 +455,17 @@ describe("d1GraphTopology", () => {
             after: Option.none(),
             limit: Schema.decodeSync(GraphNodePageLimitSchema)(10),
           })
+
           return { replacement, page }
         }).pipe(Effect.provide(d1GraphTopology({ database }))),
       )
 
       expect(Result.isFailure(result.replacement)).toBe(true)
+
       if (Result.isFailure(result.replacement)) {
         expect(result.replacement.failure.reason).toBe("capacity_exceeded")
       }
+
       expect(result.page.nodes).toEqual([])
     } finally {
       database.close()
@@ -435,6 +476,7 @@ describe("d1GraphTopology", () => {
     const database = await makeDatabase()
     const graph = "d1-runtime-decode"
     const source = reference(graph, "Source", "source")
+
     try {
       const result = await Effect.runPromise(
         Effect.gen(function*() {
@@ -451,6 +493,7 @@ describe("d1GraphTopology", () => {
              WHERE graph_id = ?2 AND document_key = ?3`,
             [JSON.stringify("corrupt"), graph, source.documentKey],
           )
+
           return yield* store.listNodes({
             graph,
             documentKinds: [],
@@ -462,9 +505,11 @@ describe("d1GraphTopology", () => {
       )
 
       expect(Result.isFailure(result)).toBe(true)
+
       if (Result.isFailure(result)) {
         expect(result.failure.reason).toBe("invalid_stored_state")
       }
+
       expect(database.sessionConstraints).toEqual(["first-primary"])
     } finally {
       database.close()
@@ -484,10 +529,12 @@ describe("d1GraphTopology", () => {
          SELECT RAISE(ABORT, 'rejected by test trigger');
        END`,
     )
+
     try {
       const result = await Effect.runPromise(
         Effect.gen(function*() {
           const store = yield* GraphTopologyStore
+
           const replacement = yield* store.replaceDocumentTopology({
             graph,
             sourceDocumentKey: source.documentKey,
@@ -499,6 +546,7 @@ describe("d1GraphTopology", () => {
               targets: [target],
             }],
           }).pipe(Effect.result)
+
           const page = yield* store.listNodes({
             graph,
             documentKinds: [],
@@ -506,6 +554,7 @@ describe("d1GraphTopology", () => {
             after: Option.none(),
             limit: Schema.decodeSync(GraphNodePageLimitSchema)(10),
           })
+
           return { replacement, page }
         }).pipe(Effect.provide(d1GraphTopology({ database }))),
       )
@@ -524,10 +573,12 @@ describe("d1GraphTopology", () => {
     const second = reference(graph, "Included", "second")
     const excluded = reference(graph, "Excluded", "third")
     const pageLimit = Schema.decodeSync(GraphNodePageLimitSchema)(1)
+
     try {
       const pages = await Effect.runPromise(
         Effect.gen(function*() {
           const store = yield* GraphTopologyStore
+
           for (const node of [second, excluded, first]) {
             yield* store.replaceDocumentTopology({
               graph,
@@ -536,6 +587,7 @@ describe("d1GraphTopology", () => {
               relations: [],
             })
           }
+
           const initial = yield* store.listNodes({
             graph,
             documentKinds: ["Included"],
@@ -543,6 +595,7 @@ describe("d1GraphTopology", () => {
             after: Option.none(),
             limit: pageLimit,
           })
+
           const continuation = yield* store.listNodes({
             graph,
             documentKinds: ["Included"],
@@ -550,6 +603,7 @@ describe("d1GraphTopology", () => {
             after: initial.next,
             limit: pageLimit,
           })
+
           return { initial, continuation }
         }).pipe(Effect.provide(d1GraphTopology({ database }))),
       )
@@ -558,6 +612,7 @@ describe("d1GraphTopology", () => {
         ...pages.initial.nodes,
         ...pages.continuation.nodes,
       ].map((node) => node.documentKey)
+
       expect(keys).toEqual([first.documentKey, second.documentKey].sort())
       expect(Option.isSome(pages.initial.next)).toBe(true)
       expect(Option.isNone(pages.continuation.next)).toBe(true)

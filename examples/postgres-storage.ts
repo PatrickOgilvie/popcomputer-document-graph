@@ -1,4 +1,4 @@
-import { Pool } from "pg"
+import type { Pool } from "pg"
 import { postgresDocumentGraph } from "@popcomputer/document-graph/postgres"
 import {
   EmbeddingProvider,

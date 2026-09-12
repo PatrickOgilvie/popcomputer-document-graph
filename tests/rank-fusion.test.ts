@@ -9,9 +9,11 @@ import {
 } from "../src/retrieval/rank-fusion.js"
 
 type Item = { readonly label: string }
+
 type Stream = "semantic" | "text"
 
 const rankConstant = Schema.decodeSync(ReciprocalRankConstantSchema)(60)
+
 const weight = (value: number) =>
   Schema.decodeSync(RetrievalWeightSchema)(value)
 
@@ -70,6 +72,7 @@ describe("weightedReciprocalRankFusion", () => {
       { key: "a", score: 0.8 },
       { key: "b", score: 0.7 },
     ])
+
     const text = stream("text", [])
 
     const forward = await fuse([semantic, text])
@@ -115,6 +118,7 @@ describe("weightedReciprocalRankFusion", () => {
     const low = await fuse([
       stream("semantic", [{ key: "result", score: 0.7 }], 1),
     ])
+
     const high = await fuse([
       stream("semantic", [{ key: "result", score: 0.7 }], 2),
     ])

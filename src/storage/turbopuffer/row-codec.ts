@@ -168,10 +168,13 @@ const validateVector = (
       "Turbopuffer row vectors must match the embedding profile dimensions",
     )
   }
+
   const [first, ...rest] = vector
+
   if (first === undefined) {
     throw new Error("Turbopuffer row vectors cannot be empty")
   }
+
   return [first, ...rest]
 }
 
@@ -182,9 +185,11 @@ export const makeTurbopufferDummyVector = (
   const vector = Array.from({ length: dimensions }, () => 0)
   vector[0] = 1
   const [first, ...rest] = vector
+
   if (first === undefined) {
     throw new Error("Embedding dimensions must be positive")
   }
+
   return [first, ...rest]
 }
 
@@ -210,7 +215,7 @@ export const makeTurbopufferMarkerRow = (input: {
   readonly liveSlotCount: number
   readonly slotHighWater: number
 }): TurbopufferMarkerRow =>
-  Schema.decodeUnknownSync(TurbopufferMarkerRowSchema)(
+  Schema.decodeSync(TurbopufferMarkerRowSchema)(
     {
       id: makeTurbopufferMarkerRowId(projectionAddress(input.context)),
       vector: makeTurbopufferDummyVector(
@@ -230,7 +235,7 @@ export const makeTurbopufferTombstoneRow = (input: {
   readonly context: TurbopufferPublicationRowContext
   readonly slotOrdinal: number
 }): TurbopufferTombstoneRow =>
-  Schema.decodeUnknownSync(TurbopufferTombstoneRowSchema)(
+  Schema.decodeSync(TurbopufferTombstoneRowSchema)(
     {
       id: makeTurbopufferSlotRowId(
         projectionAddress(input.context),
@@ -266,16 +271,22 @@ const encodeFullText = (
     const fields: TurbopufferFullTextRowFields = {
       fts_en_content: text.content,
     }
+
     if (text.context !== undefined) fields.fts_en_context = text.context
+
     if (text.label !== undefined) fields.fts_en_label = text.label
+
     return fields
   }
 
   const fields: TurbopufferFullTextRowFields = {
     fts_simple_content: text.content,
   }
+
   if (text.context !== undefined) fields.fts_simple_context = text.context
+
   if (text.label !== undefined) fields.fts_simple_label = text.label
+
   return fields
 }
 
@@ -303,7 +314,7 @@ export const makeTurbopufferLiveSlotRow = (input: {
       ? undefined
       : canonicalTurbopufferJson(input.chunk.metadata)
 
-  return Schema.decodeUnknownSync(TurbopufferLiveSlotRowSchema)(
+  return Schema.decodeSync(TurbopufferLiveSlotRowSchema)(
     {
       id: makeTurbopufferSlotRowId(
         projectionAddress(input.context),
@@ -406,6 +417,7 @@ const invalidRow = (
       cause,
     })
   }
+
   return new InvalidTurbopufferResponse({
     operation: "query",
     reason: "invalid_row",
@@ -414,17 +426,15 @@ const invalidRow = (
   })
 }
 
+const decodeJsonValue = Schema.decodeEffect(Schema.fromJsonString(JsonValueSchema))
+
 const decodeJson = (
   encoded: string,
   rowIndex: number | undefined,
 ): Effect.Effect<JsonValue, InvalidTurbopufferResponse> =>
-  Effect.try({
-    try: () =>
-      Schema.decodeUnknownSync(JsonValueSchema)(JSON.parse(encoded), {
-        onExcessProperty: "error",
-      }),
-    catch: (cause) => invalidRow(cause, rowIndex),
-  })
+  decodeJsonValue(encoded, { onExcessProperty: "error" }).pipe(
+    Effect.mapError((cause) => invalidRow(cause, rowIndex)),
+  )
 
 /** Decode one provider result row and reject malformed attributed content. */
 export const decodeTurbopufferSearchResultRow = (

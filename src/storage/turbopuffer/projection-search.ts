@@ -129,6 +129,7 @@ const decodeMultiQueryRows = (
     Effect.mapError((cause) => invalidResponse("multi_query", cause)),
     Effect.flatMap((decoded) => {
       const [semantic, text, ...unexpected] = decoded.results
+
       if (
         semantic === undefined ||
         text === undefined ||
@@ -141,6 +142,7 @@ const decodeMultiQueryRows = (
           ),
         )
       }
+
       return Effect.succeed([
         semantic.rows,
         text.rows,
@@ -180,6 +182,7 @@ const decodeCandidates = (input: {
             cause: "Provider row belongs to a different workspace partition",
           }))
         }
+
         return Effect.succeed({
           candidate: {
             ...candidateFields(decoded),
@@ -230,6 +233,7 @@ const invalidCommittedCandidate = (
       cause,
     })
   }
+
   return new InvalidTurbopufferResponse({
     operation,
     reason: "invalid_row",
@@ -251,12 +255,15 @@ const verifyCommittedCandidates = (input: {
 
     const keys: Array<ProjectionIndexKey> = []
     const seen = new Set<string>()
+
     for (const decoded of input.candidates) {
       const key = {
         documentKey: decoded.candidate.documentKey,
         projection: decoded.candidate.projection.id,
       }
+
       const identity = projectionKeyIdentity(key)
+
       if (!seen.has(identity)) {
         seen.add(identity)
         keys.push(key)
@@ -264,20 +271,24 @@ const verifyCommittedCandidates = (input: {
     }
 
     const [first, ...rest] = keys
+
     if (first === undefined) return
     const lookups = yield* input.coordinator.loadRevisions([first, ...rest])
+
     if (lookups.length !== keys.length) {
-      return yield* Effect.fail(invalidCommittedCandidate(
+      return yield* invalidCommittedCandidate(
         input.operation,
         undefined,
         "The publication coordinator returned an incomplete revision batch",
-      ))
+      )
     }
 
     const revisions = new Map<string, IndexedRevisionSnapshot>()
+
     for (let index = 0; index < keys.length; index += 1) {
       const expected = keys[index]
       const lookup = lookups[index]
+
       if (
         expected === undefined ||
         lookup === undefined ||
@@ -285,12 +296,13 @@ const verifyCommittedCandidates = (input: {
         lookup.key.projection !== expected.projection ||
         Option.isNone(lookup.revision)
       ) {
-        return yield* Effect.fail(invalidCommittedCandidate(
+        return yield* invalidCommittedCandidate(
           input.operation,
           undefined,
           "The publication coordinator did not return the active requested revision",
-        ))
+        )
       }
+
       revisions.set(
         projectionKeyIdentity(expected),
         lookup.revision.value,
@@ -302,20 +314,22 @@ const verifyCommittedCandidates = (input: {
         documentKey: decoded.candidate.documentKey,
         projection: decoded.candidate.projection.id,
       }))
+
       const chunk = revision?.chunks.find(
         (item) => item.chunkId === decoded.candidate.chunkId,
       )
+
       if (
         revision === undefined ||
         revision.revisionHash !== decoded.candidate.revisionHash ||
         chunk === undefined ||
         chunk.contentHash !== decoded.contentHash
       ) {
-        return yield* Effect.fail(invalidCommittedCandidate(
+        return yield* invalidCommittedCandidate(
           input.operation,
           decoded.rowIndex,
           "The provider row does not match the active committed revision",
-        ))
+        )
       }
     }
   })
@@ -325,11 +339,13 @@ const searchFailureReason = (
   error: unknown,
 ): "unavailable" | "invalid_stored_state" => {
   if (Schema.is(TurbopufferTransportFailed)(error)) return "unavailable"
+
   if (Schema.is(ProjectionPublicationCoordinatorFailed)(error)) {
     return error.reason === "invalid_stored_state"
       ? "invalid_stored_state"
       : "unavailable"
   }
+
   return "invalid_stored_state"
 }
 
@@ -367,6 +383,7 @@ const compileSemantic = (
         queryVector: request.vector,
         candidates: request.candidates,
       })
+
       if (
         compiled._tag !== "NoDocuments" &&
         (request.embeddingProfile.id !==
@@ -380,6 +397,7 @@ const compileSemantic = (
           "The semantic query embedding profile does not match the Turbopuffer namespace",
         )
       }
+
       return compiled
     },
     catch: semanticFailure,
@@ -426,9 +444,11 @@ export const makeTurbopufferProjectionSearchStores = (input: {
   const partition = validateTurbopufferWorkspacePartition(
     input.config.partition,
   )
+
   const clientPartition = validateTurbopufferWorkspacePartition(
     input.client.partition,
   )
+
   if (
     !turbopufferWorkspacePartitionsEqual(partition, clientPartition) ||
     input.coordinator.indexGeneration !== partition.d1IndexGeneration
@@ -438,6 +458,7 @@ export const makeTurbopufferProjectionSearchStores = (input: {
       reason: "mismatch",
     })
   }
+
   const consistency = parseQueryConsistency(
     input.config.consistency ?? "strong",
   )
@@ -534,6 +555,7 @@ export const makeTurbopufferProjectionSearchStores = (input: {
           textCandidates: request.textCandidates,
           consistency,
         })
+
         if (
           compiled._tag !== "NoDocuments" &&
           (request.embeddingProfile.id !==
@@ -547,6 +569,7 @@ export const makeTurbopufferProjectionSearchStores = (input: {
             "The hybrid query embedding profile does not match the Turbopuffer namespace",
           )
         }
+
         return compiled
       },
       catch: semanticFailure,

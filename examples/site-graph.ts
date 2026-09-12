@@ -11,6 +11,7 @@ import {
 const AgencyId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("AgencyId"),
 )
+
 const WorkId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("WorkId"),
 )

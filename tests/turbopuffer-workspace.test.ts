@@ -90,11 +90,13 @@ describe("Turbopuffer D1 workspace composition", () => {
     )
     expect(String(workspace.partition.deploymentId)).toBe("test-deployment")
     expect(workspace.partition.endpoint._tag).toBe("Region")
+
     if (workspace.partition.endpoint._tag === "Region") {
       expect(String(workspace.partition.endpoint.region)).toBe(
         "gcp-us-central1",
       )
     }
+
     expect(workspace.partition.embeddingProfile).toEqual(profile)
     expect(services.embeddings).toBe(embeddings)
     expect(services.topology).toBeDefined()
@@ -119,6 +121,7 @@ describe("Turbopuffer D1 workspace composition", () => {
         schemaGeneration: 1,
       },
     }
+
     const cases = [
       {
         input: { retries: -1 },

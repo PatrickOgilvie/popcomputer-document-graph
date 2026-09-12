@@ -189,11 +189,13 @@ export function defineDocument(
   // SAFETY: The shorthand overload requires a Struct as its first argument.
   const value = valueOrInput as Schema.Struct<Schema.Struct.Fields>
   const id = value.fields[shorthand.id]
+
   if (id === undefined || !Schema.isSchema(id)) {
     throw new Error(`Unknown document identity field: ${shorthand.id}`)
   }
 
   const idSchema = Schema.make<Schema.Codec<unknown, unknown>>(id.ast)
+
   const valueSchema = Schema.make<Schema.Codec<unknown, unknown>>(
     value.ast,
   )

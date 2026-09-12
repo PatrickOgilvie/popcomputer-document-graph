@@ -85,8 +85,10 @@ const EnabledTextSearchPolicyInputSchema = Schema.Struct({
     Schema.makeFilter((input) => {
       const context =
         input.weights?.context ?? DefaultTextSearchWeights.context
+
       const label =
         input.weights?.label ?? DefaultTextSearchWeights.label
+
       const content =
         input.weights?.content ?? DefaultTextSearchWeights.content
 
@@ -104,8 +106,8 @@ const TextSearchPolicyInputSchema = Schema.Union([
 export const parseTextSearchPolicy = (
   input: TextSearchPolicyInput | undefined,
 ): TextSearchPolicy => {
-  const parsed = Schema.decodeUnknownSync(TextSearchPolicyInputSchema)(
-    input === undefined ? {} : input,
+  const parsed = Schema.decodeSync(TextSearchPolicyInputSchema)(
+    input ?? {},
     { onExcessProperty: "error" },
   )
 

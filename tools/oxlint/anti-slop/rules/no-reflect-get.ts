@@ -19,6 +19,7 @@ export const noReflectGetRule = defineRule({
     return {
       CallExpression(node) {
         if (node.callee.type === "Super" || node.callee.type === "V8IntrinsicExpression") return;
+
         if (isGlobalReflectMethodCall(context.sourceCode, node.callee, "get")) {
           context.report({ node, messageId: "reflectGet" });
         }

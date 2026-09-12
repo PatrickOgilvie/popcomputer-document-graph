@@ -4,12 +4,12 @@ import {
   type EmbeddingProviderService,
 } from "../../indexing/embedding-provider.js"
 import { ProjectionIndexStore } from "../../indexing/projection-index.js"
-import {
+import type {
   ProjectionHybridSearchStore,
   ProjectionSearchStore,
   ProjectionTextSearchStore,
 } from "../../retrieval/graph-retrieval.js"
-import { GraphTopologyStore } from "../../graph/graph-topology.js"
+import type { GraphTopologyStore } from "../../graph/graph-topology.js"
 import {
   d1ProjectionPublicationCoordinator,
 } from "../d1/projection-publication.js"
@@ -111,6 +111,7 @@ const publicationCoordinator = (input: {
       reason: "invalid_value",
     })
   }
+
   if (
     input.retainedPublicationHistory !== undefined &&
     (!Number.isSafeInteger(input.retainedPublicationHistory) ||
@@ -122,6 +123,7 @@ const publicationCoordinator = (input: {
       reason: "invalid_value",
     })
   }
+
   if (input.publicationLeaseMilliseconds === undefined) {
     return input.retainedPublicationHistory === undefined
       ? d1ProjectionPublicationCoordinator({
@@ -134,6 +136,7 @@ const publicationCoordinator = (input: {
           retainedPublicationHistory: input.retainedPublicationHistory,
         })
   }
+
   return input.retainedPublicationHistory === undefined
     ? d1ProjectionPublicationCoordinator({
         database: input.database,
@@ -164,6 +167,7 @@ export const makeTurbopufferD1Workspace = (
     embeddingProfile: config.embeddings.profile,
     schemaGeneration: config.turbopuffer.schemaGeneration,
   })
+
   const client = officialTurbopufferClient({
     apiKey: config.turbopuffer.apiKey,
     partition,
@@ -171,6 +175,7 @@ export const makeTurbopufferD1Workspace = (
     retries: config.turbopuffer.retries,
     fetch: config.turbopuffer.fetch,
   })
+
   const coordinator = publicationCoordinator({
     database: config.database,
     indexGeneration: partition.d1IndexGeneration,
@@ -178,16 +183,20 @@ export const makeTurbopufferD1Workspace = (
       config.turbopuffer.publicationLeaseMilliseconds,
     retainedPublicationHistory: config.turbopuffer.retainedPublicationHistory,
   })
+
   const infrastructure = Layer.mergeAll(client, coordinator)
+
   const indexConfig: TurbopufferProjectionIndexConfig = {
     partition,
     maximumSlotsPerRevision: config.turbopuffer.maximumSlotsPerRevision,
     maximumPublicationBytes: config.turbopuffer.maximumPublicationBytes,
   }
+
   const searchConfig: TurbopufferProjectionSearchConfig = {
     partition,
     consistency: config.turbopuffer.consistency,
   }
+
   const providerStorage = Layer.mergeAll(
     Layer.effect(
       ProjectionIndexStore,

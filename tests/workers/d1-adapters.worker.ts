@@ -41,24 +41,30 @@ const reference = (
 })
 
 const source = reference("Contract", "contract-1")
+
 const target = reference("Invoice", "invoice-1")
+
 const sourceDocumentKey = makeDocumentKey({
   graph: Graph,
   documentKind: source.kind,
   encodedId: source.id,
 })
+
 const targetDocumentKey = makeDocumentKey({
   graph: Graph,
   documentKind: target.kind,
   encodedId: target.id,
 })
+
 const projectionKey: ProjectionIndexKey = {
   documentKey: sourceDocumentKey,
   projection: "search",
 }
+
 const revisionToken = Schema.decodeSync(IndexRevisionTokenSchema)(
   "workerd-revision-1",
 )
+
 const replacementIntent: ProjectionReplacementIntent = {
   _tag: "Replace",
   key: projectionKey,
@@ -106,6 +112,7 @@ describe("D1 adapters in workerd", () => {
     const topology = await Effect.runPromise(
       Effect.gen(function*() {
         const store = yield* GraphTopologyStore
+
         const commit = yield* store.replaceDocumentTopology({
           graph: Graph,
           sourceDocumentKey,
@@ -120,6 +127,7 @@ describe("D1 adapters in workerd", () => {
             }],
           }],
         })
+
         const nodes = yield* store.listNodes({
           graph: Graph,
           documentKinds: [],
@@ -127,6 +135,7 @@ describe("D1 adapters in workerd", () => {
           after: Option.none(),
           limit: Schema.decodeSync(GraphNodePageLimitSchema)(10),
         })
+
         const related = yield* store.findRelatedNodes({
           graph: Graph,
           documentKeys: [sourceDocumentKey, targetDocumentKey, sourceDocumentKey],
@@ -137,6 +146,7 @@ describe("D1 adapters in workerd", () => {
           direction: "outgoing",
           limit: Schema.decodeSync(GraphNeighbourLimitSchema)(1),
         })
+
         return { commit, nodes, related }
       }).pipe(
         Effect.provide(d1GraphTopology({ database: env.WORKSPACE_DB })),
@@ -169,16 +179,21 @@ describe("D1 adapters in workerd", () => {
       Effect.gen(function*() {
         const coordinator = yield* ProjectionPublicationCoordinator
         const begun = yield* coordinator.beginPublication(replacementIntent)
+
         if (begun._tag !== "Publish") {
           return yield* Effect.die("Expected a new publication lease")
         }
+
         const outcome = yield* coordinator.finalizePublication(begun.lease)
+
         const replay = yield* coordinator.beginPublication({
           ...replacementIntent,
           commit: { ...replacementIntent.commit, inserted: 0, updated: 1 },
         })
+
         const [head] = yield* coordinator.loadHeads([projectionKey])
         const [revision] = yield* coordinator.loadRevisions([projectionKey])
+
         return { lease: begun.lease, outcome, replay, head, revision }
       }).pipe(
         Effect.provide(d1ProjectionPublicationCoordinator({
@@ -216,6 +231,7 @@ describe("D1 adapters in workerd", () => {
       readonly status: string
       readonly generation: number
     }>()
+
     expect(persisted).toEqual({ status: "committed", generation: 1 })
   })
 })

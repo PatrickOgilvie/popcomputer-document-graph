@@ -52,6 +52,7 @@ export type TurbopufferRegion = typeof TurbopufferRegionSchema.Type
 const canonicalCustomBaseURL = (input: string): string | undefined => {
   try {
     const parsed = new URL(input)
+
     if (
       parsed.protocol !== "https:" ||
       parsed.username !== "" ||
@@ -61,7 +62,9 @@ const canonicalCustomBaseURL = (input: string): string | undefined => {
     ) {
       return undefined
     }
+
     const path = parsed.pathname.replace(/\/+$/, "")
+
     return `${parsed.origin}${path}`
   } catch {
     return undefined
@@ -81,13 +84,11 @@ export const TurbopufferBaseURLSchema = Schema.Trimmed.check(
 /** Canonical secret-free base URL for a custom Turbopuffer-compatible API. */
 export type TurbopufferBaseURL = typeof TurbopufferBaseURLSchema.Type
 
-const TurbopufferRegionEndpointSchema = Schema.Struct({
-  _tag: Schema.Literal("Region"),
+const TurbopufferRegionEndpointSchema = Schema.TaggedStruct("Region", {
   region: TurbopufferRegionSchema,
 })
 
-const TurbopufferCustomEndpointSchema = Schema.Struct({
-  _tag: Schema.Literal("Custom"),
+const TurbopufferCustomEndpointSchema = Schema.TaggedStruct("Custom", {
   baseURL: TurbopufferBaseURLSchema,
 })
 
@@ -153,6 +154,7 @@ const expectedPartitionFields = (input: {
   "identity" | "namespace" | "d1IndexGeneration"
 > => {
   const identity = makeTurbopufferNamespaceIdentity(input)
+
   return {
     identity,
     namespace: namespaceFromTurbopufferIdentity({ identity }),
@@ -164,6 +166,7 @@ const hasDerivedPartitionIdentity = (
   partition: WorkspacePartitionFields,
 ): boolean => {
   const expected = expectedPartitionFields(partition)
+
   return partition.identity === expected.identity &&
     partition.namespace === expected.namespace &&
     partition.d1IndexGeneration === expected.d1IndexGeneration
@@ -217,15 +220,18 @@ const parseEndpoint = (
 ): TurbopufferEndpoint => {
   try {
     if (endpoint._tag === "Region") {
-      return Schema.decodeUnknownSync(TurbopufferEndpointSchema)(endpoint, {
+      return Schema.decodeSync(TurbopufferEndpointSchema)(endpoint, {
         onExcessProperty: "error",
       })
     }
+
     const baseURL = canonicalCustomBaseURL(endpoint.baseURL)
+
     if (baseURL === undefined) {
       throw new Error("Invalid custom Turbopuffer base URL")
     }
-    return Schema.decodeUnknownSync(TurbopufferEndpointSchema)({
+
+    return Schema.decodeSync(TurbopufferEndpointSchema)({
       _tag: "Custom",
       baseURL,
     }, { onExcessProperty: "error" })
@@ -248,6 +254,7 @@ export const makeTurbopufferWorkspacePartition = (input: {
   const workspace = parseWorkspaceId(input.workspace)
   const deploymentId = parseDeploymentId(input.deploymentId)
   const endpoint = parseEndpoint(input.endpoint)
+
   const embeddingProfile = {
     id: input.embeddingProfile.id,
     version: input.embeddingProfile.version,
@@ -255,9 +262,11 @@ export const makeTurbopufferWorkspacePartition = (input: {
       input.embeddingProfile.dimensions,
     ),
   }
+
   const schemaGeneration = parseTurbopufferSchemaGeneration(
     input.schemaGeneration,
   )
+
   const expected = expectedPartitionFields({
     workspace,
     deploymentId,
@@ -265,8 +274,9 @@ export const makeTurbopufferWorkspacePartition = (input: {
     embeddingProfile,
     schemaGeneration,
   })
+
   try {
-    return Schema.decodeUnknownSync(TurbopufferWorkspacePartitionSchema)({
+    return Schema.decodeSync(TurbopufferWorkspacePartitionSchema)({
       workspace,
       deploymentId,
       endpoint,

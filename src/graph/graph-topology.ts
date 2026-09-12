@@ -1,4 +1,4 @@
-import { Context, Effect, Option, Schema } from "effect"
+import { Context, type Effect, type Option, Schema } from "effect"
 import type { EncodedDocumentReference } from "../document/document-instance.js"
 import type { DocumentKey } from "../document/document-identity.js"
 import type {

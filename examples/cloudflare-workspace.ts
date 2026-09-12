@@ -1,7 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types"
 import { Redacted } from "effect"
-import {
-  type EmbeddingProviderService,
+import type {
+  EmbeddingProviderService,
 } from "@popcomputer/document-graph"
 import {
   makeTurbopufferD1Workspace,

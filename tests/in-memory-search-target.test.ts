@@ -22,14 +22,19 @@ import {
 import { inMemoryDocumentGraph } from "../src/in-memory.js"
 
 const GraphId = "in-memory-search-target"
+
 const ProjectionId = "content"
+
 const ProjectionVersion = "v1"
+
 const embeddingProfile = defineEmbeddingProfile({
   id: "test:in-memory-target",
   version: "v1",
   dimensions: 2,
 })
+
 const textPolicy = parseTextSearchPolicy(undefined)
+
 if (textPolicy === "disabled") {
   throw new Error("The default text policy unexpectedly disabled search")
 }
@@ -45,6 +50,7 @@ const makeReplacement = (input: {
   const documentKey = Schema.decodeSync(DocumentKeySchema)(
     input.identity.repeat(64),
   )
+
   const contentHash = Schema.decodeSync(ContentHashSchema)(
     input.contentIdentity.repeat(64),
   )
@@ -97,6 +103,7 @@ describe("in-memory search targets", () => {
       content: "needle needle needle",
       vector: [1, 0],
     })
+
     const eligible = makeReplacement({
       identity: "1",
       chunkIdentity: "2",
@@ -105,7 +112,9 @@ describe("in-memory search targets", () => {
       content: "needle",
       vector: [0.8, 0.2],
     })
+
     const target = documentKeys([eligible.key.documentKey])
+
     const scope = makeGraphSearchScope(
       GraphId,
       { target },
@@ -117,6 +126,7 @@ describe("in-memory search targets", () => {
         },
       ],
     )
+
     const candidates = Schema.decodeSync(SearchResultCountSchema)(1)
 
     const result = await Effect.runPromise(
@@ -127,12 +137,14 @@ describe("in-memory search targets", () => {
 
         const semanticStore = yield* ProjectionSearchStore
         const textStore = yield* ProjectionTextSearchStore
+
         const semanticHits = yield* semanticStore.searchCandidates({
           vector: [1, 0],
           embeddingProfile,
           scope,
           candidates,
         })
+
         const textHits = yield* textStore.searchTextCandidates({
           query: "needle",
           policy: textPolicy,

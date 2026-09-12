@@ -28,15 +28,18 @@ const documentKey = makeDocumentKey({
   documentKind: "contract",
   encodedId: { source: "alpha", number: 42 },
 })
+
 const profile = defineEmbeddingProfile({
   id: "test/embedding",
   version: "v1",
   dimensions: 3,
 })
+
 const deployment = {
   deploymentId: "test:turbopuffer-row-codec",
   endpoint: { _tag: "Region" as const, region: "gcp-us-central1" },
 }
+
 const partition = makeTurbopufferWorkspacePartition({
   ...deployment,
   workspace: "workspace-1",
@@ -64,8 +67,11 @@ const context = (
 const revisionHash = Schema.decodeSync(ProjectionRevisionHashSchema)(
   "a".repeat(64),
 )
+
 const chunkId = Schema.decodeSync(ChunkIdSchema)("b".repeat(64))
+
 const contentHash = Schema.decodeSync(ContentHashSchema)("c".repeat(64))
+
 const chunk = {
   chunkId,
   contentHash,
@@ -95,6 +101,7 @@ describe("Turbopuffer row codec", () => {
       embeddingProfile: profile,
       schemaGeneration: 2,
     })
+
     expect(String(first.identity)).toHaveLength(64)
     expect(first.namespace).toContain(first.identity)
     expect(first.d1IndexGeneration).toContain(first.identity)
@@ -118,25 +125,30 @@ describe("Turbopuffer row codec", () => {
       liveSlotCount: 1,
       slotHighWater: 2,
     })
+
     const laterMarker = makeTurbopufferMarkerRow({
       context: context(2),
       liveSlotCount: 1,
       slotHighWater: 2,
     })
+
     const firstSlot = makeTurbopufferTombstoneRow({
       context: context(1),
       slotOrdinal: 0,
     })
+
     const laterSlot = makeTurbopufferTombstoneRow({
       context: context(2),
       slotOrdinal: 0,
     })
+
     const otherPartition = makeTurbopufferWorkspacePartition({
       ...deployment,
       workspace: "workspace-2",
       embeddingProfile: profile,
       schemaGeneration: 2,
     })
+
     const isolatedSlot = makeTurbopufferTombstoneRow({
       context: context(1, otherPartition),
       slotOrdinal: 0,
@@ -154,6 +166,7 @@ describe("Turbopuffer row codec", () => {
 
   test("populates only the selected full-text language on live rows", () => {
     const policy = parseTextSearchPolicy({ language: "english" })
+
     const row = makeTurbopufferLiveSlotRow({
       context: context(1),
       encodedTarget: {
@@ -206,6 +219,7 @@ describe("Turbopuffer row codec", () => {
     const decoded = await Effect.runPromise(
       decodeTurbopufferSearchResultRow(wire),
     )
+
     expect(decoded.providerScore).toBe(0.25)
     expect(decoded.partitionIdentity).toBe(partition.identity)
     expect(decoded.contentHash).toBe(contentHash)
@@ -218,16 +232,19 @@ describe("Turbopuffer row codec", () => {
     expect(scoreTurbopufferCosineDistance(decoded.providerScore)).toBe(0.75)
     expect(scoreTurbopufferBm25(7.5)).toBe(7.5)
 
-    await expect(
-      Effect.runPromise(
-        decodeTurbopufferSearchResultRow({
-          ...wire,
-          encoded_id_json: "not-json",
-        }),
-      ),
-    ).rejects.toMatchObject({
-      _tag: "InvalidTurbopufferResponse",
-      reason: "invalid_row",
-    })
+    for (const invalid of [
+      { ...wire, encoded_id_json: "not-json" },
+      { ...wire, metadata_json: "not-json" },
+      { ...wire, encoded_id_json: '{"number":1e400}' },
+      { ...wire, metadata_json: '{"number":1e400}' },
+    ]) {
+      await expect(
+        Effect.runPromise(decodeTurbopufferSearchResultRow(invalid, 2)),
+      ).rejects.toMatchObject({
+        _tag: "InvalidTurbopufferResponse",
+        reason: "invalid_row",
+        rowIndex: 2,
+      })
+    }
   })
 })

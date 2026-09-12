@@ -62,10 +62,15 @@ export interface GraphTopologyStoreConformanceFixture {
 }
 
 const GraphId = "@popcomputer/document-graph/conformance/topology"
+
 const SourceKind = "Work"
+
 const TargetKind = "Agency"
+
 const RelationId = "deliveredBy"
+
 const RelationVersion = "v1"
+
 const RetiredRelationId = "retiredBy"
 
 const reference = (
@@ -75,6 +80,7 @@ const reference = (
 
 const keyedReference = (kind: string, id: string) => {
   const encoded = reference(kind, id)
+
   return {
     documentKey: makeDocumentKey({
       graph: encoded.graph,
@@ -86,13 +92,21 @@ const keyedReference = (kind: string, id: string) => {
 }
 
 const source = keyedReference(SourceKind, "source-work")
+
 const emptySource = keyedReference(SourceKind, "empty-work")
+
 const firstTarget = keyedReference(TargetKind, "first-agency")
+
 const secondTarget = keyedReference(TargetKind, "second-agency")
+
 const thirdTarget = keyedReference(TargetKind, "third-agency")
+
 const deletionSource = keyedReference(SourceKind, "deletion-source")
+
 const deletionTarget = keyedReference(TargetKind, "deletion-target")
+
 const allLimit = Schema.decodeSync(GraphNeighbourLimitSchema)(10)
+
 const boundedLimit = Schema.decodeSync(GraphNeighbourLimitSchema)(2)
 
 const initialRelation: OutgoingGraphRelationSet = {
@@ -229,6 +243,7 @@ export const verifyGraphTopologyStoreConformance = () =>
   Effect.gen(function*() {
     const fixture = makeGraphTopologyStoreConformanceFixture()
     const store = yield* GraphTopologyStore
+
     for (const node of [
       source,
       emptySource,
@@ -243,26 +258,31 @@ export const verifyGraphTopologyStoreConformance = () =>
 
     yield* store.replaceDocumentTopology(fixture.empty)
     const emptyNodes = yield* listAllNodes(store)
+
     if (!nodeMatches(emptyNodes.nodes[0], {
       documentKey: emptySource.documentKey,
       state: "Materialized",
     })) {
-      return yield* Effect.fail(violation("empty_source_materialization"))
+      return yield* violation("empty_source_materialization")
     }
 
     const initialCommit = yield* store.replaceDocumentTopology(fixture.initial)
+
     if (!commitMatches(initialCommit, { inserted: 3, retained: 0, deleted: 0 })) {
-      return yield* Effect.fail(violation("complete_replacement"))
+      return yield* violation("complete_replacement")
     }
+
     const afterInitial = yield* listAllNodes(store)
+
     const first = afterInitial.nodes.find(
       (node) => node.documentKey === firstTarget.documentKey,
     )
+
     if (!nodeMatches(first, {
       documentKey: firstTarget.documentKey,
       state: "Referenced",
     })) {
-      return yield* Effect.fail(violation("referenced_target_creation"))
+      return yield* violation("referenced_target_creation")
     }
 
     yield* store.replaceDocumentTopology({
@@ -273,18 +293,21 @@ export const verifyGraphTopologyStoreConformance = () =>
     })
     yield* store.replaceDocumentTopology(fixture.initial)
     const afterPromotion = yield* listAllNodes(store)
+
     const promoted = afterPromotion.nodes.find(
       (node) => node.documentKey === firstTarget.documentKey,
     )
+
     if (!nodeMatches(promoted, {
       documentKey: firstTarget.documentKey,
       state: "Materialized",
     })) {
-      return yield* Effect.fail(violation("materialized_promotion"))
+      return yield* violation("materialized_promotion")
     }
 
     const outgoing = yield* store.findRelatedNodes(fixture.outgoing).pipe(Effect.map((groups) => groups.flatMap((group) => group.nodes)))
     const incoming = yield* store.findRelatedNodes(fixture.incoming).pipe(Effect.map((groups) => groups.flatMap((group) => group.nodes)))
+
     if (
       outgoing.map((node) => node.documentKey).join() !==
         [firstTarget, secondTarget, thirdTarget]
@@ -296,70 +319,83 @@ export const verifyGraphTopologyStoreConformance = () =>
         state: "Materialized",
       })
     ) {
-      return yield* Effect.fail(violation("bidirectional_traversal"))
+      return yield* violation("bidirectional_traversal")
     }
 
     const bounded = yield* store.findRelatedNodes({
       ...fixture.outgoing,
       limit: boundedLimit,
     }).pipe(Effect.map((groups) => groups.flatMap((group) => group.nodes)))
+
     if (bounded.length !== 2 || String(bounded[0]?.documentKey).localeCompare(
       String(bounded[1]?.documentKey),
     ) >= 0) {
-      return yield* Effect.fail(violation("bounded_ordering"))
+      return yield* violation("bounded_ordering")
     }
 
     const batchKeys = [source.documentKey, emptySource.documentKey, deletionSource.documentKey, source.documentKey]
+
     const batched = yield* store.findRelatedNodes({
       ...fixture.outgoing,
       documentKeys: batchKeys,
       limit: boundedLimit,
     })
+
     const emptyBatch = yield* store.findRelatedNodes({ ...fixture.outgoing, documentKeys: [] })
+
     const staleBatch = yield* store.findRelatedNodes({
       ...fixture.outgoing, documentKeys: batchKeys, relationVersion: "retired-version",
     })
+
     if (batched.length !== batchKeys.length || emptyBatch.length !== 0 ||
       batched.some((group, index) => group.documentKey !== batchKeys[index]) ||
       batched[0]?.nodes.map((node) => node.documentKey).join() !== bounded.map((node) => node.documentKey).join() ||
       batched[3]?.nodes.map((node) => node.documentKey).join() !== bounded.map((node) => node.documentKey).join() ||
       batched[1]?.nodes.length !== 0 || batched[2]?.nodes.length !== 0 ||
       staleBatch.length !== batchKeys.length || staleBatch.some((group) => group.nodes.length !== 0)) {
-      return yield* Effect.fail(violation("batch_bounds_and_identity"))
+      return yield* violation("batch_bounds_and_identity")
     }
 
     const reduced = yield* store.replaceDocumentTopology(fixture.reduced)
+
     if (!commitMatches(reduced, { inserted: 0, retained: 2, deleted: 1 })) {
-      return yield* Effect.fail(violation("complete_replacement"))
+      return yield* violation("complete_replacement")
     }
+
     const afterReduction = yield* listAllNodes(store)
+
     if (afterReduction.nodes.some(
       (node) => node.documentKey === thirdTarget.documentKey,
     )) {
-      return yield* Effect.fail(violation("orphan_reference_collection"))
+      return yield* violation("orphan_reference_collection")
     }
 
     const invalid = yield* store.replaceDocumentTopology({
       ...fixture.reduced,
       sourceDocumentKey: thirdTarget.documentKey,
     }).pipe(Effect.result)
+
     if (!Result.isFailure(invalid) ||
       invalid.failure.reason !== "invalid_stored_state") {
-      return yield* Effect.fail(violation("invalid_replacement_atomicity"))
+      return yield* violation("invalid_replacement_atomicity")
     }
+
     const afterInvalid = yield* store.findRelatedNodes(fixture.outgoing).pipe(Effect.map((groups) => groups.flatMap((group) => group.nodes)))
+
     if (afterInvalid.length !== 2) {
-      return yield* Effect.fail(violation("invalid_replacement_atomicity"))
+      return yield* violation("invalid_replacement_atomicity")
     }
 
     const removed = yield* store.deleteNode({
       graph: GraphId,
       documentKey: secondTarget.documentKey,
     })
+
     const removedAgain = yield* store.deleteNode({
       graph: GraphId,
       documentKey: secondTarget.documentKey,
     })
+
     if (
       removed.deletedNodes !== 1 ||
       removed.deletedRelations !== 1 ||
@@ -368,19 +404,23 @@ export const verifyGraphTopologyStoreConformance = () =>
       removedAgain.deletedRelations !== 0 ||
       removedAgain.deletedReferencedNodes !== 0
     ) {
-      return yield* Effect.fail(violation("idempotent_node_deletion"))
+      return yield* violation("idempotent_node_deletion")
     }
 
     yield* store.replaceDocumentTopology(fixture.deletion)
+
     const deletion = yield* store.deleteNode({
       graph: GraphId,
       documentKey: deletionSource.documentKey,
     })
+
     const repeatedDeletion = yield* store.deleteNode({
       graph: GraphId,
       documentKey: deletionSource.documentKey,
     })
+
     const afterDeletion = yield* listAllNodes(store)
+
     if (
       deletion.deletedNodes !== 1 ||
       deletion.deletedRelations !== 1 ||
@@ -394,12 +434,11 @@ export const verifyGraphTopologyStoreConformance = () =>
           node.documentKey === deletionTarget.documentKey,
       )
     ) {
-      return yield* Effect.fail(
-        violation("hard_deletion_orphan_collection"),
-      )
+      return yield* violation("hard_deletion_orphan_collection")
     }
 
     yield* store.replaceDocumentTopology(fixture.withRetired)
+
     const pruned = yield* store.pruneTopology({
       graph: GraphId,
       registered: [{
@@ -409,16 +448,18 @@ export const verifyGraphTopologyStoreConformance = () =>
         targetDocumentKind: TargetKind,
       }],
     })
+
     const retired = yield* store.findRelatedNodes({
       ...fixture.outgoing,
       relation: RetiredRelationId,
     }).pipe(Effect.map((groups) => groups.flatMap((group) => group.nodes)))
+
     if (
       pruned.deletedRelations !== 1 ||
       pruned.deletedReferencedNodes !== 1 ||
       retired.length !== 0
     ) {
-      return yield* Effect.fail(violation("schema_pruning"))
+      return yield* violation("schema_pruning")
     }
 
     for (const node of [
@@ -432,5 +473,6 @@ export const verifyGraphTopologyStoreConformance = () =>
     ]) {
       yield* store.deleteNode({ graph: GraphId, documentKey: node.documentKey })
     }
+
     return { capability: "graph_topology" as const, verified: verifiedLaws }
   })

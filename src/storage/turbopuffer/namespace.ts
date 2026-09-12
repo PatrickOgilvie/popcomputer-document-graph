@@ -27,9 +27,11 @@ export const updateTurbopufferNamespaceSchema = Effect.fn(
   "TurbopufferNamespace.updateSchema",
 )(function*() {
   const client = yield* TurbopufferClient
+
   const manifest = compileTurbopufferSchemaManifest(
     client.partition.embeddingProfile.dimensions,
   )
+
   yield* client.updateSchema({ schema: { ...manifest.attributes } })
 })
 
@@ -41,6 +43,7 @@ export const inspectTurbopufferNamespaceSchema: Effect.Effect<
 > = Effect.gen(function*() {
   const client = yield* TurbopufferClient
   const response = yield* client.inspectSchema()
+
   const attributes = yield* Schema.decodeUnknownEffect(
     NamespaceSchemaResponseSchema,
   )(response).pipe(
@@ -51,6 +54,7 @@ export const inspectTurbopufferNamespaceSchema: Effect.Effect<
         cause,
       })),
   )
+
   return {
     format: "honertia.document-graph/turbopuffer-schema-inspection-v1",
     namespace: client.partition.namespace,
