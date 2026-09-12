@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.1 - 2026-09-12
+
+Validation fixes and internal cleanup following a one-off audit with
+`@popcomputer/lint`.
+
+### Fixed
+
+- PostgreSQL semantic and text candidate decoding rejects non-finite scores
+  as invalid stored state before they can reach ranking.
+
+### Maintenance
+
+- Simplified yieldable errors, direct service provisioning, typed decoding,
+  tagged schemas, and nullish defaults while preserving encoded data shapes.
+- Replaced ad hoc persisted JSON parsing with typed Effects while preserving
+  storage error handling.
+- Made the retrieval concurrency regression deterministic and expanded
+  malformed-row and non-finite-score coverage.
+- Applied the audit's spacing and type-import rules. The one-off recommended
+  preset findings fell from 3,881 to 998; the existing lint configuration and
+  dependency set are unchanged.
+
+No schema migrations or reindexing are required when upgrading from 0.4.0.
+
 ## 0.4.0 - 2026-09-09
 
 Faster graph retrieval, automatic PostgreSQL native vector scoring, and
