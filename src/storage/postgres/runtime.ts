@@ -25,6 +25,7 @@ import {
   type TextSearchCandidate,
 } from "../../retrieval/graph-retrieval.js"
 import type { MetadataFilter } from "../../retrieval/metadata-filter.js"
+import { makeRequestCoalescer } from "./coalesce.js"
 import {
   countProjectedRevisionReplacement,
   embeddingProfilesEqual,
@@ -1057,6 +1058,153 @@ const scopedColumns = (nativeNamespace: Option.Option<string>): string =>
               r.graph_id, r.document_kind, r.encoded_document_id,
               r.projection_id, r.projection_version, r.revision_hash`
 
+/** Cosine similarity of `source` rows to one query vector, native where eligible. */
+const semanticScoreSql = (
+  source: string,
+  vector: string,
+  norm: string,
+  nativeNamespace: Option.Option<string>,
+): string => {
+  const float64Score = `(
+    SELECT sum(component.stored * component.query) /
+           NULLIF(sqrt(sum(component.stored * component.stored)) *
+                  (SELECT norm FROM ${norm}), 0)
+    FROM unnest(${source}.embedding, ${vector}::double precision[]) AS component(stored, query)
+  )`
+
+  return Option.isSome(nativeNamespace)
+    ? `CASE WHEN ${source}.embedding_native_eligible THEN
+         1 - ${nativeNamespace.value}.cosine_distance(
+           ${source}.embedding::${nativeNamespace.value}.vector,
+           ${vector}::double precision[]::${nativeNamespace.value}.vector
+         )
+       ELSE ${float64Score} END`
+    : float64Score
+}
+
+const scoredColumns = (source: string): string =>
+  `${source}.chunk_id, ${source}.document_key, ${source}.section_key, ${source}.section_part,
+              ${source}.content, ${source}.has_metadata, ${source}.metadata,
+              ${source}.graph_id, ${source}.document_kind, ${source}.encoded_document_id,
+              ${source}.projection_id, ${source}.projection_version, ${source}.revision_hash`
+
+const compareCandidates = (left: SemanticSearchCandidate, right: SemanticSearchCandidate): number =>
+  right.score - left.score || (left.chunkId < right.chunkId ? -1 : left.chunkId > right.chunkId ? 1 : 0)
+
+/**
+ * Several query vectors against one scope and profile in one statement: a
+ * branch of CTEs per vector, each shaped exactly like the single-vector
+ * statement, joined with UNION ALL. An exhaustive plan reads the scope once
+ * and scores every vector against it; an approximate plan runs one index scan
+ * per vector. Each branch keeps its own candidate limit and order.
+ */
+const searchCandidatesBatch = async (
+  connection: Queryable,
+  tables: { readonly revisions: string; readonly chunks: string },
+  requests: readonly [SemanticCandidateRequest, ...Array<SemanticCandidateRequest>],
+  plan: SemanticSearchPlan,
+): Promise<ReadonlyArray<ReadonlyArray<SemanticSearchCandidate>>> => {
+  const [first] = requests
+  if (first.scope.target._tag === "NoDocuments") return requests.map(() => [])
+
+  const nativeNamespace = plan._tag === "Approximate" ? Option.none<string>() : plan.nativeNamespace
+  const values: Array<unknown> = [
+    first.embeddingProfile.id,
+    first.embeddingProfile.version,
+    first.embeddingProfile.dimensions,
+  ]
+  const filters = [
+    "r.embedding_profile_id = $1",
+    "r.embedding_profile_version = $2",
+    "r.embedding_dimensions = $3",
+  ]
+  appendScopeSql(first.scope, values, filters)
+
+  const ctes: Array<string> = plan._tag === "Approximate" ? [] : [`scoped AS MATERIALIZED (
+       SELECT ${scopedColumns(nativeNamespace)}
+       FROM ${tables.chunks} AS c
+       INNER JOIN ${tables.revisions} AS r
+         ON r.document_key = c.document_key
+        AND r.projection_id = c.projection_id
+       WHERE ${filters.join("\n         AND ")}
+     )`]
+  const selects: Array<string> = []
+
+  requests.forEach((request, ordinal) => {
+    values.push([...request.vector])
+    const vector = `$${values.length}`
+    const norm = `query_norm_${ordinal}`
+    let source = "scoped"
+
+    ctes.push(`${norm} AS MATERIALIZED (
+       SELECT sqrt(sum(component * component)) AS norm
+       FROM unnest(${vector}::double precision[]) AS component
+     )`)
+
+    if (plan._tag === "Approximate") {
+      const native = plan.nativeNamespace
+      values.push(Math.min(10_000, request.candidates * plan.index.overfetch))
+      source = `scoped_${ordinal}`
+      ctes.push(`nearest_${ordinal} AS MATERIALIZED (
+       SELECT c.chunk_id
+       FROM ${tables.chunks} AS c
+       WHERE ${indexedRowsSql("c", plan.graphNamespace, plan.index)}
+         AND coalesce((
+           SELECT TRUE
+           FROM ${tables.revisions} AS r
+           WHERE r.document_key = c.document_key
+             AND r.projection_id = c.projection_id
+             AND ${filters.join("\n             AND ")}
+           LIMIT 1
+         ), FALSE)
+       ORDER BY ${indexedEmbeddingSql("c", native, plan.index)}
+         OPERATOR(${native}.<=>) (${vector}::double precision[]::${native}.${plan.index.representation}(${plan.index.dimensions}))
+       LIMIT $${values.length}
+     )`, `${source} AS MATERIALIZED (
+       SELECT ${scopedColumns(nativeNamespace)}
+       FROM nearest_${ordinal}
+       INNER JOIN ${tables.chunks} AS c ON c.chunk_id = nearest_${ordinal}.chunk_id
+       INNER JOIN ${tables.revisions} AS r
+         ON r.document_key = c.document_key
+        AND r.projection_id = c.projection_id
+     )`)
+    }
+
+    ctes.push(`scored_${ordinal} AS MATERIALIZED (
+       SELECT ${scoredColumns(source)},
+              ${semanticScoreSql(source, vector, norm, nativeNamespace)} AS score FROM ${source}
+     )`)
+    values.push(request.candidates)
+    selects.push(`(SELECT ${ordinal} AS request_ordinal, scored.score, scored.chunk_id, scored.document_key,
+            scored.graph_id, scored.document_kind,
+            scored.encoded_document_id, scored.projection_id,
+            scored.projection_version, scored.revision_hash,
+            scored.section_key, scored.section_part, scored.content,
+            scored.has_metadata, scored.metadata
+     FROM scored_${ordinal} AS scored
+     WHERE scored.score IS NOT NULL
+       AND scored.score <> 'NaN'::double precision
+     ORDER BY scored.score DESC, scored.chunk_id ASC
+     LIMIT $${values.length})`)
+  })
+
+  const rows = await queryRows<SearchCandidateRow & { readonly request_ordinal: number }>(
+    connection,
+    `WITH ${ctes.join(",\n     ")}\n     ${selects.join("\n     UNION ALL\n     ")}`,
+    values,
+  )
+
+  const grouped = requests.map((): Array<SemanticSearchCandidate> => [])
+
+  for (const { request_ordinal: ordinal, ...row } of rows) {
+    grouped[ordinal]?.push(projectSearchCandidate(row, "semantic candidate"))
+  }
+
+  // UNION ALL does not promise branch order, so each branch is re-sorted
+  // exactly as its own ORDER BY did.
+  return grouped.map((candidates) => candidates.sort(compareCandidates))
+}
+
 const searchCandidates = async (
   connection: Queryable,
   tables: { readonly revisions: string; readonly chunks: string },
@@ -1084,21 +1232,7 @@ const searchCandidates = async (
 
   appendScopeSql(request.scope, values, filters)
 
-  const float64Score = `(
-    SELECT sum(component.stored * component.query) /
-           NULLIF(sqrt(sum(component.stored * component.stored)) *
-                  (SELECT norm FROM query_norm), 0)
-    FROM unnest(scoped.embedding, $1::double precision[]) AS component(stored, query)
-  )`
-
-  const score = Option.isSome(nativeNamespace)
-    ? `CASE WHEN scoped.embedding_native_eligible THEN
-         1 - ${nativeNamespace.value}.cosine_distance(
-           scoped.embedding::${nativeNamespace.value}.vector,
-           $1::double precision[]::${nativeNamespace.value}.vector
-         )
-       ELSE ${float64Score} END`
-    : float64Score
+  const score = semanticScoreSql("scoped", "$1", "query_norm", nativeNamespace)
 
   let scoped: string
 
@@ -1781,6 +1915,8 @@ const namedPostgresOperation = <
 
 interface ResolvedPostgresOptions {
   readonly schema: string
+  /** Present when concurrent searches and topology reads share statements. */
+  readonly coalescing: { readonly windowMilliseconds: number; readonly maximumBatch: number } | undefined
   readonly vectorSearch: "auto" | "float64" | "approximate"
   readonly approximate: ApproximateVectorIndex | undefined
   readonly searchSettings: ReadonlyArray<PostgresReadSetting>
@@ -1790,6 +1926,10 @@ interface ResolvedPostgresOptions {
 
 const SearchTimeoutSchema = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 2_147_483_647 }))
 
+const CoalescingWindowSchema = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 0, maximum: 100 }))
+
+const CoalescingBatchSchema = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 2, maximum: 64 }))
+
 const resolvePostgresOptions = (config: PostgresDocumentGraphConfig): ResolvedPostgresOptions => {
   const vectorSearch = resolveVectorSearch(config.vectorSearch)
   const timeout = config.searchTimeoutMilliseconds
@@ -1797,6 +1937,10 @@ const resolvePostgresOptions = (config: PostgresDocumentGraphConfig): ResolvedPo
 
   return {
     schema: Schema.decodeSync(PostgresSchemaNameSchema)(config.schema ?? DefaultSchema),
+    coalescing: config.coalesceSearches === undefined ? undefined : {
+      windowMilliseconds: Schema.decodeSync(CoalescingWindowSchema)(config.coalesceSearches.windowMilliseconds ?? 2),
+      maximumBatch: Schema.decodeSync(CoalescingBatchSchema)(config.coalesceSearches.maximumBatch ?? 16),
+    },
     vectorSearch: vectorSearch.mode,
     approximate: vectorSearch.mode === "approximate" ? vectorSearch.index : undefined,
     searchSettings: timeout === undefined
@@ -1817,7 +1961,7 @@ const makePostgresStorage = (
   options: ResolvedPostgresOptions,
   capabilities: Effect.Effect<VectorCapabilities, ProjectionSearchStoreFailed>,
 ): DocumentGraphStorageService => {
-  const { schema, vectorSearch, approximate, searchSettings, bestEffortTextSettings } = options
+  const { schema, vectorSearch, approximate, searchSettings, bestEffortTextSettings, coalescing } = options
   const namespace = quoteIdentifier(schema)
 
   const tables: PostgresTables = {
@@ -1827,6 +1971,70 @@ const makePostgresStorage = (
     nodes: `${namespace}."graph_nodes"`,
     locks: `${namespace}."mutation_locks"`,
   }
+
+  const semanticSettings = (plan: SemanticSearchPlan, candidates: number): ReadonlyArray<PostgresReadSetting> =>
+    plan._tag === "Approximate"
+      ? [
+          // relaxed_order keeps scanning past candidates that scope filters discard;
+          // exact rescoring restores the final order.
+          ["hnsw.iterative_scan", "relaxed_order"],
+          ["hnsw.ef_search", String(Math.min(1_000, Math.max(plan.index.efSearch, candidates * plan.index.overfetch)))],
+          ["hnsw.max_scan_tuples", String(plan.index.maxScanTuples)],
+          ...searchSettings,
+        ]
+      : searchSettings
+
+  type SemanticSearchCall = { readonly request: SemanticCandidateRequest; readonly plan: SemanticSearchPlan }
+
+  // Coalesced searches share one plan: requests join a batch only when their
+  // plan, scope and embedding profile match. The batch's ef_search covers its
+  // largest candidate count, so no branch gets less recall than it would alone.
+  const semanticBatchKey = ({ request, plan }: SemanticSearchCall): string => JSON.stringify([
+    plan._tag,
+    plan._tag === "Approximate" ? plan.index.index : null,
+    plan._tag === "Approximate" ? plan.nativeNamespace : Option.getOrNull(plan.nativeNamespace),
+    request.embeddingProfile,
+    request.scope,
+  ])
+
+  const semanticCoalescer = coalescing === undefined ? undefined : makeRequestCoalescer<SemanticSearchCall, ReadonlyArray<SemanticSearchCandidate>>({
+    ...coalescing,
+    run: (_key, calls) => {
+      const [first, ...rest] = calls
+      if (first === undefined) return Promise.resolve([])
+      const settings = semanticSettings(first.plan, Math.max(...calls.map(({ request }) => request.candidates)))
+
+      return withReadSettings(config, settings, (client) => rest.length === 0
+        ? searchCandidates(client, tables, first.request, first.plan).then((candidates) => [candidates])
+        : searchCandidatesBatch(client, tables, [first.request, ...rest.map(({ request }) => request)], first.plan))
+    },
+  })
+
+  // Reads for the same relation, direction and bound merge their document keys
+  // into one read; groups come back in key order, so each caller takes its slice.
+  const topologyCoalescer = coalescing === undefined ? undefined : makeRequestCoalescer<FindRelatedGraphNodes, ReadonlyArray<RelatedGraphNodeSet>>({
+    ...coalescing,
+    run: async (_key, reads) => {
+      const [first] = reads
+      if (first === undefined) return []
+      const groups = await findRelatedGraphNodes(connectionFor(config), tables, {
+        ...first,
+        documentKeys: reads.flatMap(({ documentKeys }) => documentKeys),
+      })
+      let offset = 0
+
+      return reads.map(({ documentKeys }) => {
+        const slice = groups.slice(offset, offset + documentKeys.length)
+        offset += documentKeys.length
+        return slice
+      })
+    },
+  })
+
+  const topologyBatchKey = (input: FindRelatedGraphNodes): string => JSON.stringify([
+    input.graph, input.documentKind, input.direction, input.relation,
+    input.relationVersion, input.relatedDocumentKind, input.limit,
+  ])
 
   const storage: DocumentGraphStorageService = {
     loadRevisions: (keys) =>
@@ -1935,19 +2143,15 @@ const makePostgresStorage = (
           ? { _tag: "Approximate", nativeNamespace: resolved.nativeNamespace.value, graphNamespace: namespace, index: approximate }
           : { _tag: "Exhaustive", nativeNamespace: resolved.nativeNamespace }
 
-        const settings: ReadonlyArray<PostgresReadSetting> = plan._tag === "Approximate"
-          ? [
-              // relaxed_order keeps scanning past candidates that scope filters discard;
-              // exact rescoring restores the final order.
-              ["hnsw.iterative_scan", "relaxed_order"],
-              ["hnsw.ef_search", String(Math.min(1_000, Math.max(plan.index.efSearch, request.candidates * plan.index.overfetch)))],
-              ["hnsw.max_scan_tuples", String(plan.index.maxScanTuples)],
-              ...searchSettings,
-            ]
-          : searchSettings
+        if (semanticCoalescer !== undefined) {
+          return Effect.tryPromise({
+            try: () => semanticCoalescer.submit(semanticBatchKey({ request, plan }), { request, plan }),
+            catch: searchFailure,
+          })
+        }
 
         return Effect.tryPromise({
-          try: () => withReadSettings(config, settings, (client) => searchCandidates(client, tables, request, plan)),
+          try: () => withReadSettings(config, semanticSettings(plan, request.candidates), (client) => searchCandidates(client, tables, request, plan)),
           catch: searchFailure,
         })
       }))
@@ -2024,7 +2228,9 @@ const makePostgresStorage = (
     findRelatedNodes: (input) =>
       Effect.tryPromise({
         try: () =>
-          findRelatedGraphNodes(connectionFor(config), tables, input),
+          topologyCoalescer === undefined || input.documentKeys.length === 0
+            ? findRelatedGraphNodes(connectionFor(config), tables, input)
+            : topologyCoalescer.submit(topologyBatchKey(input), input),
         catch: (cause) => topologyFailure("find_related", cause),
       }),
   }

@@ -1340,6 +1340,29 @@ budget: a text search PostgreSQL cancels at that timeout returns no candidates,
 so hybrid retrieval continues on its semantic channel. Other failures still
 fail.
 
+An application that fans out, such as one retrieval per key phrase, sends many
+small searches at once, and each holds a pooled connection. Set
+`coalesceSearches` to merge searches that arrive together:
+
+```ts
+const StorageLive = postgresDocumentGraph({
+  pool,
+  vectorSearch: approximate,
+  coalesceSearches: { windowMilliseconds: 2, maximumBatch: 16 },
+})
+```
+
+Semantic searches that share a scope, embedding profile and plan become one
+statement with a branch per query vector, and topology reads for the same
+relation become one read. Each branch has the single-search shape, so results
+are identical to searching alone. An exhaustive plan reads the scope once for
+every vector in the batch. The first search waits up to `windowMilliseconds`
+for others; a full batch flushes at once. A batch runs under one statement
+timeout and fails together.
+
+The coalescer belongs to the storage Layer. Build that Layer per request where
+the runtime ties I/O to a request, as Cloudflare Workers does with Hyperdrive.
+
 The repository includes a reproducible comparison of the previous cosine
 query and the optimized query, plus document-key filtering:
 

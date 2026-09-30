@@ -11,6 +11,7 @@ export type {
   PostgresApproximateVectorSearch,
   PostgresDocumentGraphConfig,
   PostgresQueryClient,
+  PostgresSearchCoalescing,
 } from "./storage/postgres/connection.js"
 
 export {

@@ -189,6 +189,34 @@ test.skipIf(!enabled)("approximate search uses the HNSW index, preserves scope a
 
     expect(keyedOverlap / (10 * 24)).toBeGreaterThanOrEqual(0.9)
 
+    // Coalesced searches share one statement and return exactly what each
+    // search returns alone, on the exhaustive and the index path.
+    const embeddingProfile = defineEmbeddingProfile({ id: "hnsw-profile", version: "v1", dimensions })
+    const searchTogether = (vectorSearch: "float64" | PostgresApproximateVectorSearch, vectors: ReadonlyArray<ReadonlyArray<number>>) =>
+      Effect.runPromise(ProjectionSearchStore.pipe(
+        Effect.flatMap((store) => Effect.all(
+          vectors.map((vector) => store.searchCandidates({ vector, embeddingProfile, scope: everything, candidates })),
+          { concurrency: "unbounded" },
+        )),
+        Effect.provide(postgresDocumentGraph({
+          transaction, schema, vectorSearch, searchTimeoutMilliseconds: 30_000,
+          coalesceSearches: { windowMilliseconds: 20 },
+        })),
+      ))
+
+    for (const vectorSearch of ["float64", approximate] as const) {
+      const vectors = unitVectors(6, 211)
+      statements.length = 0
+      const together = await searchTogether(vectorSearch, vectors)
+      expect(statements.filter((statement) => statement.text.includes("query_norm_5"))).toHaveLength(1)
+      expect(statements.filter((statement) => statement.text.includes("query_norm"))).toHaveLength(1)
+
+      for (const [index, vector] of vectors.entries()) {
+        const alone = await search(vectorSearch, vector, everything)
+        expect(together[index]?.map((row) => [row.chunkId, row.score])).toEqual(alone.map((row) => [row.chunkId, row.score]))
+      }
+    }
+
     // The statement the adapter sends must be served by the HNSW index.
     const statement = statements.find((item) => item.text.includes("nearest AS MATERIALIZED"))
     if (statement === undefined) throw new Error("No approximate statement recorded")

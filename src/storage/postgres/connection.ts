@@ -83,6 +83,20 @@ export interface PostgresApproximateVectorSearch {
   readonly approximateAboveDocuments?: number
 }
 
+/**
+ * Merge searches that arrive together into one statement each. Semantic
+ * searches that share a scope and embedding profile become one statement with
+ * a branch per query vector; topology reads for the same relation become one
+ * read. A caller that fans out, such as one search per key phrase, then holds
+ * one pooled connection per statement instead of one per query.
+ */
+export interface PostgresSearchCoalescing {
+  /** How long the first search waits for others to join it. Defaults to 2 ms. */
+  readonly windowMilliseconds?: number
+  /** Most searches one statement carries. Defaults to 16. */
+  readonly maximumBatch?: number
+}
+
 interface PostgresDocumentGraphOptions {
   readonly schema?: string
   /** Auto uses installed pgvector for eligible vectors; float64 keeps array scoring. */
@@ -100,6 +114,12 @@ interface PostgresDocumentGraphOptions {
    * keeps one slow lexical query from failing the whole search.
    */
   readonly textSearchTimeoutMilliseconds?: number
+  /**
+   * Coalesce concurrent searches and topology reads into shared statements.
+   * The coalescer lives in this storage Layer, so build the Layer per request
+   * where the runtime scopes I/O to a request, as Cloudflare Workers does.
+   */
+  readonly coalesceSearches?: PostgresSearchCoalescing
 }
 
 /**
