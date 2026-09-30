@@ -764,6 +764,13 @@ export interface GraphRetrievalHandle<
     options?: {
       readonly limit?: number
       readonly candidates?: RetrievalCandidateBudgets
+      /**
+       * Full-text query used by text channels instead of `query`, such as a
+       * few quoted key phrases joined with OR. Semantic channels still embed
+       * `query`, so a descriptive sentence and precise phrases can each go to
+       * the channel that handles them best.
+       */
+      readonly textQuery?: string
     },
   ) => Effect.Effect<
     ReadonlyArray<
@@ -2339,6 +2346,7 @@ const bindDocumentGraph = <
         options?: {
           readonly limit?: number
           readonly candidates?: RetrievalCandidateBudgets
+          readonly textQuery?: string
         },
       ) =>
         Effect.gen(function*() {
@@ -2398,8 +2406,9 @@ const bindDocumentGraph = <
               ? undefined
               : yield* Effect.cached(prepareSemanticQuery(query))
 
+          // Prepared semantic queries embed `query`; the raw string reaches text channels only.
           const expanded = yield* expandRoutes(
-            query,
+            options?.textQuery ?? query,
             searchPlan.routePlan,
             semanticQuery,
           )

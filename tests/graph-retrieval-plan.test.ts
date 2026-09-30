@@ -488,6 +488,42 @@ describe("graph retrieval plans", () => {
 
     expect(queries).toEqual(["national"])
   })
+
+  test("sends a separate text query to text channels while semantic channels embed the query", async () => {
+    const embedded: Array<string> = []
+    const searchedText: Array<string> = []
+
+    const recordingLive = Layer.mergeAll(
+      inMemoryDocumentGraph(),
+      Layer.succeed(EmbeddingProvider, { ...embeddings, embedQuery: (query) => {
+        embedded.push(query)
+
+        return Effect.succeed([1, 1])
+      } }),
+    )
+
+    const results = await Effect.runPromise(
+      Effect.gen(function*() {
+        yield* seed
+        const text = yield* ProjectionTextSearchStore
+
+        return yield* FindAgenciesWithHybridRoutes.search("a partner for a national launch", { textQuery: "distribution" }).pipe(
+          Effect.provideService(ProjectionTextSearchStore, {
+            ...text,
+            searchTextCandidates: (request) => {
+              searchedText.push(request.query)
+
+              return text.searchTextCandidates(request)
+            },
+          }),
+        )
+      }).pipe(Effect.provide(recordingLive)),
+    )
+
+    expect(embedded).toEqual(["a partner for a national launch"])
+    expect(new Set(searchedText)).toEqual(new Set(["distribution"]))
+    expect(results[0]?.signals.some((signal) => signal.stream.channel === "text")).toBe(true)
+  })
 })
 
 if (import.meta.url === "") {
