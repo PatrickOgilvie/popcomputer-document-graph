@@ -691,6 +691,18 @@ an opaque entity score.
 can define `FindProducts`, `FindExperts`, or `FindArticles` from their own graph.
 Illegal relation names, source kinds, and target kinds fail during authoring.
 
+Semantic and text channels need different queries to work well: a sentence
+embeds well, while full-text search wants a few precise phrases. `textQuery`
+sends its own query to text channels while semantic channels still embed the
+first argument:
+
+```ts
+const agencies = yield* FindAgencies.search(
+  "close-up food photography and video with appetite appeal",
+  { limit: 6, textQuery: '"food photography" OR "food styling"' },
+)
+```
+
 Each route discovers its own candidates before target ranking is fused. Agency
 profiles and related Work evidence can therefore each introduce a relevant
 Agency. Relationship expansion groups up to 100 distinct source documents into
@@ -1280,6 +1292,14 @@ builds on disk, much more slowly.
 `searchTimeoutMilliseconds` applies to every semantic and text search, with or
 without an index. PostgreSQL cancels the statement itself, so a search its
 caller abandoned does not keep running.
+
+Full-text search ranks every match on the stored combined vector, then applies
+the exact per-field weights to the best four matches per requested candidate.
+Common phrases can still match much of a large corpus. Set
+`textSearchTimeoutMilliseconds` to make text search best effort under its own
+budget: a text search PostgreSQL cancels at that timeout returns no candidates,
+so hybrid retrieval continues on its semantic channel. Other failures still
+fail.
 
 The repository includes a reproducible comparison of the previous cosine
 query and the optimized query, plus document-key filtering:

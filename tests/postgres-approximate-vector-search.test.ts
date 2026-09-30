@@ -162,6 +162,73 @@ describe("approximate semantic search", () => {
   })
 })
 
+describe("postgres text search", () => {
+  test("weighs only the best lexical matches exactly, four per requested candidate", async () => {
+    const { queries, transaction } = recordingTransaction(false)
+    const textPolicy = parseTextSearchPolicy(undefined)
+    if (textPolicy === "disabled") throw new Error("The default text policy unexpectedly disabled search")
+
+    await Effect.runPromise(Effect.gen(function*() {
+      const text = yield* ProjectionTextSearchStore
+      yield* text.searchTextCandidates({ query: '"food photography" OR "appetite appeal"', policy: textPolicy, scope: request.scope, candidates: request.candidates })
+    }).pipe(Effect.provide(postgresDocumentGraph({ transaction }))))
+
+    const statement = queries.find((query) => query.text.includes("websearch_to_tsquery"))
+    expect(statement?.text).toContain("matched AS MATERIALIZED")
+    expect(statement?.text).toContain("ORDER BY ts_rank_cd(c.text_search_english, parsed.query) DESC")
+    expect(statement?.values?.slice(-2)).toEqual([6, 24])
+  })
+})
+
+describe("best-effort text search", () => {
+  const timingOut = () => {
+    const queries: Array<string> = []
+    const transaction = postgresTransactionClient({ query: (text) => {
+      queries.push(text)
+      if (text.includes("websearch_to_tsquery")) return Promise.reject(Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" }))
+
+      return Promise.resolve({ rows: [] })
+    } })
+
+    return { queries, transaction }
+  }
+
+  const searchText = (config: PostgresDocumentGraphConfig) => {
+    const textPolicy = parseTextSearchPolicy(undefined)
+    if (textPolicy === "disabled") throw new Error("The default text policy unexpectedly disabled search")
+
+    return Effect.runPromise(Effect.gen(function*() {
+      const text = yield* ProjectionTextSearchStore
+
+      return yield* text.searchTextCandidates({ query: '"brand identity"', policy: textPolicy, scope: request.scope, candidates: request.candidates })
+    }).pipe(Effect.provide(postgresDocumentGraph(config)), Effect.result))
+  }
+
+  test("returns no text candidates when its own budget runs out", async () => {
+    const { queries, transaction } = timingOut()
+    const result = await searchText({ transaction, searchTimeoutMilliseconds: 8_000, textSearchTimeoutMilliseconds: 2_000 })
+
+    expect(Result.isSuccess(result) && result.success).toEqual([])
+    expect(queries).toContain("SAVEPOINT honertia_document_graph_read; SET LOCAL statement_timeout = 2000")
+  })
+
+  test("still fails on a timeout when text search is not best effort", async () => {
+    const { transaction } = timingOut()
+    const result = await searchText({ transaction, searchTimeoutMilliseconds: 8_000 })
+
+    expect(Result.isFailure(result)).toBe(true)
+  })
+
+  test("still fails on errors other than a timeout", async () => {
+    const transaction = postgresTransactionClient({ query: (text) => text.includes("websearch_to_tsquery")
+      ? Promise.reject(Object.assign(new Error("relation does not exist"), { code: "42P01" }))
+      : Promise.resolve({ rows: [] }) })
+    const result = await searchText({ transaction, textSearchTimeoutMilliseconds: 2_000 })
+
+    expect(Result.isFailure(result)).toBe(true)
+  })
+})
+
 describe("search statement timeout", () => {
   test("wraps semantic and text searches without changing untimed searches", async () => {
     const { queries, transaction } = recordingTransaction(false)

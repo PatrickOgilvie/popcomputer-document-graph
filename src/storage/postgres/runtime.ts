@@ -65,7 +65,7 @@ import {
   type PruneGraphTopology,
   type StoredGraphNode,
 } from "../../graph/graph-topology.js"
-import { Cache, Effect, Exit, Layer, Option, Result, Schema, SchemaIssue } from "effect"
+import { Cache, Effect, Exit, Layer, Option, Predicate, Result, Schema, SchemaIssue } from "effect"
 import {
   connectionFor,
   queryRows,
@@ -1178,6 +1178,9 @@ const searchCandidates = async (
   )
 }
 
+/** Lexical matches weighed exactly per requested candidate. */
+const TextRerankDepth = 4
+
 const searchTextCandidates = async (
   connection: Queryable,
   tables: { readonly revisions: string; readonly chunks: string },
@@ -1202,11 +1205,29 @@ const searchTextCandidates = async (
   const contentWeight = `$${values.length}`
   values.push(request.candidates)
   const candidateLimit = `$${values.length}`
+  values.push(Math.min(10_000, request.candidates * TextRerankDepth))
+  const prefetchLimit = `$${values.length}`
 
+  // Weighted per-field scores re-tokenise attributed text, which is costly
+  // when a common phrase matches thousands of chunks. Rank every match on
+  // the stored combined vector first, then weigh only the best few exactly.
   const rows = await queryRows<SearchCandidateRow>(
     connection,
     `WITH parsed AS (
        SELECT websearch_to_tsquery('${config}'::regconfig, $1) AS query
+     ),
+     matched AS MATERIALIZED (
+       SELECT c.chunk_id
+       FROM ${tables.chunks} AS c
+       INNER JOIN ${tables.revisions} AS r
+         ON r.document_key = c.document_key
+        AND r.projection_id = c.projection_id
+       CROSS JOIN parsed
+       WHERE parsed.query <> ''::tsquery
+         AND c.${searchColumn} @@ parsed.query
+         AND ${filters.join("\n         AND ")}
+       ORDER BY ts_rank_cd(c.${searchColumn}, parsed.query) DESC, c.chunk_id ASC
+       LIMIT ${prefetchLimit}
      ),
      scoped AS MATERIALIZED (
        SELECT c.chunk_id, c.document_key, c.section_key, c.section_part,
@@ -1230,14 +1251,12 @@ const searchTextCandidates = async (
                   parsed.query
                 )
               ) END AS score
-       FROM ${tables.chunks} AS c
+       FROM matched
+       INNER JOIN ${tables.chunks} AS c ON c.chunk_id = matched.chunk_id
        INNER JOIN ${tables.revisions} AS r
          ON r.document_key = c.document_key
         AND r.projection_id = c.projection_id
        CROSS JOIN parsed
-       WHERE parsed.query <> ''::tsquery
-         AND c.${searchColumn} @@ parsed.query
-         AND ${filters.join("\n         AND ")}
      )
      SELECT score, chunk_id, document_key, graph_id, document_kind,
             encoded_document_id, projection_id, projection_version,
@@ -1765,6 +1784,8 @@ interface ResolvedPostgresOptions {
   readonly vectorSearch: "auto" | "float64" | "approximate"
   readonly approximate: ApproximateVectorIndex | undefined
   readonly searchSettings: ReadonlyArray<PostgresReadSetting>
+  /** Text searches run under this budget instead; a text timeout then yields no text candidates. */
+  readonly bestEffortTextSettings: ReadonlyArray<PostgresReadSetting> | undefined
 }
 
 const SearchTimeoutSchema = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 2_147_483_647 }))
@@ -1772,6 +1793,7 @@ const SearchTimeoutSchema = Schema.Number.check(Schema.isInt(), Schema.isBetween
 const resolvePostgresOptions = (config: PostgresDocumentGraphConfig): ResolvedPostgresOptions => {
   const vectorSearch = resolveVectorSearch(config.vectorSearch)
   const timeout = config.searchTimeoutMilliseconds
+  const textTimeout = config.textSearchTimeoutMilliseconds
 
   return {
     schema: Schema.decodeSync(PostgresSchemaNameSchema)(config.schema ?? DefaultSchema),
@@ -1780,15 +1802,22 @@ const resolvePostgresOptions = (config: PostgresDocumentGraphConfig): ResolvedPo
     searchSettings: timeout === undefined
       ? []
       : [["statement_timeout", String(Schema.decodeSync(SearchTimeoutSchema)(timeout))]],
+    bestEffortTextSettings: textTimeout === undefined
+      ? undefined
+      : [["statement_timeout", String(Schema.decodeSync(SearchTimeoutSchema)(textTimeout))]],
   }
 }
+
+/** PostgreSQL cancelled the statement at its statement_timeout (SQLSTATE 57014). */
+const isStatementTimeout = (cause: unknown): boolean =>
+  Predicate.hasProperty(cause, "code") && cause.code === "57014"
 
 const makePostgresStorage = (
   config: PostgresDocumentGraphConfig,
   options: ResolvedPostgresOptions,
   capabilities: Effect.Effect<VectorCapabilities, ProjectionSearchStoreFailed>,
 ): DocumentGraphStorageService => {
-  const { schema, vectorSearch, approximate, searchSettings } = options
+  const { schema, vectorSearch, approximate, searchSettings, bestEffortTextSettings } = options
   const namespace = quoteIdentifier(schema)
 
   const tables: PostgresTables = {
@@ -1921,11 +1950,29 @@ const makePostgresStorage = (
     },
 
     searchTextCandidates: (request) =>
-      Effect.tryPromise({
-        try: () =>
-          withReadSettings(config, searchSettings, (client) => searchTextCandidates(client, tables, request)),
-        catch: textSearchFailure,
-      }),
+      bestEffortTextSettings === undefined
+        ? Effect.tryPromise({
+            try: () =>
+              withReadSettings(config, searchSettings, (client) => searchTextCandidates(client, tables, request)),
+            catch: textSearchFailure,
+          })
+        : Effect.tryPromise({
+            // Only a timeout is tolerated: the lexical channel then contributes
+            // nothing and semantic candidates carry the search. Other failures fail.
+            try: () =>
+              withReadSettings(config, bestEffortTextSettings, (client) => searchTextCandidates(client, tables, request))
+                .then((rows) => ({ rows, timedOut: false }))
+                .catch((cause: unknown) => {
+                  if (isStatementTimeout(cause)) return { rows: [], timedOut: true }
+                  throw cause
+                }),
+            catch: textSearchFailure,
+          }).pipe(
+            Effect.tap(({ timedOut }) => timedOut
+              ? Effect.annotateCurrentSpan("document_graph.text_search.timed_out", true)
+              : Effect.void),
+            Effect.map(({ rows }) => rows),
+          ),
 
     replaceDocumentTopology: (replacement) =>
       transactionEffect(

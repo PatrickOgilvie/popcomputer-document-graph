@@ -83,6 +83,14 @@ interface PostgresDocumentGraphOptions {
    * cancels the statement itself, so an abandoned search cannot keep running.
    */
   readonly searchTimeoutMilliseconds?: number
+  /**
+   * Makes full-text search best effort under its own, usually shorter, budget.
+   * When PostgreSQL cancels a text search at this timeout, that search returns
+   * no candidates instead of failing, so hybrid retrieval continues on its
+   * semantic channel. Common phrases can match most of a large corpus; this
+   * keeps one slow lexical query from failing the whole search.
+   */
+  readonly textSearchTimeoutMilliseconds?: number
 }
 
 /**
