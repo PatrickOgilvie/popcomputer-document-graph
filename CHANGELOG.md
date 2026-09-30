@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0 - 2026-09-30
+
+PostgreSQL search coalescing, plus everything in 0.6.0, which was never
+published.
+
+### Added
+
+- `coalesceSearches: { windowMilliseconds, maximumBatch }` on
+  `postgresDocumentGraph` merges searches that arrive together:
+  - semantic searches that share a scope, embedding profile and plan become one
+    statement with a branch per query vector, with results identical to
+    searching alone;
+  - topology reads for the same relation become one read.
+
+  A fan-out of retrievals then holds one pooled connection per statement
+  instead of one per query. It is off unless configured.
+
 ## 0.6.0 - 2026-09-30
 
 Graph retrieval within a known population of targets.
