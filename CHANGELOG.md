@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 - 2026-09-30
+
+Graph retrieval within a known population of targets.
+
+### Added
+
+- `retrieval.within(targets, { maximumDocuments })` resolves a population of
+  targets once for any number of searches, and `search(query, { within })`
+  ranks only those targets. Direct routes search the targets' own documents;
+  relation routes search only source documents related to a target, read from
+  canonical topology when the scope is created. The search provider applies
+  the population before candidate limits. Sources related to targets outside
+  the scope rank only their in-scope targets. An empty population returns
+  nothing without embedding the query.
+- A population above `maximumDocuments` (at most
+  `MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS`) fails with the new
+  `InvalidSearchQuery` reason `scope_too_large` rather than searching an
+  arbitrary subset.
+- PostgreSQL `approximateAboveDocuments` (default 1,000): document-key scopes
+  larger than this use the HNSW index with the key filter applied during the
+  scan; smaller ones keep exact exhaustive scoring.
+- `retrieval_scope` operation name for tracing and `DocumentGraphUnavailable`.
+
+### Changed
+
+- Large document-key scopes no longer always search exhaustively under
+  `vectorSearch: { mode: "approximate" }`; see `approximateAboveDocuments`.
+
 ## 0.5.0 - 2026-09-30
 
 Approximate PostgreSQL semantic search through a pgvector HNSW expression
