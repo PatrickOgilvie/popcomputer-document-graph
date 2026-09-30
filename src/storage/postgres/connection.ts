@@ -72,6 +72,15 @@ export interface PostgresApproximateVectorSearch {
   readonly overfetch?: number
   /** Index tuples an iterative scan may visit when scope filters discard candidates. Defaults to 20,000. */
   readonly maxScanTuples?: number
+  /**
+   * Document-key scopes, such as a retrieval `within` population, above this
+   * many documents use the index; smaller ones are scored exhaustively.
+   * Exhaustive scoring reads every scoped embedding, so it suits a few
+   * hundred documents. A very selective filter can exhaust `maxScanTuples`
+   * before the index finds enough scoped chunks, so small scopes stay exact.
+   * Defaults to 1,000; 0 sends every document-key scope to the index.
+   */
+  readonly approximateAboveDocuments?: number
 }
 
 interface PostgresDocumentGraphOptions {

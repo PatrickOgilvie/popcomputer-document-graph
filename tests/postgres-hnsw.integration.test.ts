@@ -11,6 +11,7 @@ import {
 import { defineEmbeddingProfile } from "../src/indexing/embedding-provider.js"
 import { makeChunkId, makeDocumentKey } from "../src/document/document-identity.js"
 import {
+  documentKeys,
   makeGraphSearchScope,
   ProjectionSearchStore,
   SearchResultCountSchema,
@@ -155,6 +156,38 @@ test.skipIf(!enabled)("approximate search uses the HNSW index, preserves scope a
     }
 
     expect(overlap / compared).toBeGreaterThanOrEqual(0.95)
+
+    // A document-key target, as retrieval scopes produce: 80 of the 1,600
+    // evidence documents. The index scan applies it, so every row is in scope,
+    // the request still fills, and recall matches exhaustive scoring.
+    const [firstKey, ...otherKeys] = Array.from({ length: 80 }, (_, index) =>
+      makeDocumentKey({ graph: "hnsw-test", documentKind: "Work", encodedId: index * 20 }))
+    if (firstKey === undefined) throw new Error("No scoped document keys")
+    const scopedKeys = new Set([firstKey, ...otherKeys])
+    const population = makeGraphSearchScope("hnsw-test", { target: documentKeys([firstKey, ...otherKeys]) })
+    let keyedOverlap = 0
+
+    // Below the threshold the scope is scored exhaustively; at 0 it goes
+    // through the index, where the scope check discards 95% of candidates.
+    const keyedIndex: PostgresApproximateVectorSearch = { ...approximate, approximateAboveDocuments: 0 }
+
+    for (const query of unitVectors(10, 131)) {
+      const exhaustive = await search("float64", query, population)
+      const expected = new Set(exhaustive.map((row) => row.chunkId))
+      statements.length = 0
+      const small = await search(approximate, query, population)
+      expect(statements.some((statement) => statement.text.includes("nearest AS MATERIALIZED"))).toBe(false)
+      expect(small.map((row) => row.chunkId)).toEqual(exhaustive.map((row) => row.chunkId))
+
+      statements.length = 0
+      const indexed = await search(keyedIndex, query, population)
+      expect(statements.some((statement) => statement.text.includes("nearest AS MATERIALIZED"))).toBe(true)
+      expect(indexed).toHaveLength(24)
+      expect(indexed.every((row) => scopedKeys.has(row.documentKey))).toBe(true)
+      keyedOverlap += indexed.filter((row) => expected.has(row.chunkId)).length
+    }
+
+    expect(keyedOverlap / (10 * 24)).toBeGreaterThanOrEqual(0.9)
 
     // The statement the adapter sends must be served by the HNSW index.
     const statement = statements.find((item) => item.text.includes("nearest AS MATERIALIZED"))

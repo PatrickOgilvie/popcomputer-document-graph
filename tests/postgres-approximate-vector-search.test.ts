@@ -120,7 +120,7 @@ describe("approximate semantic search", () => {
 
   test.each([
     { name: "the index is invalid or still building", indexReady: false, input: request },
-    { name: "the scope names documents", indexReady: true, input: { ...request, scope: makeGraphSearchScope("approximate-test", { target: documentKeys([makeDocumentKey({ graph: "approximate-test", documentKind: "Work", encodedId: 1 })]) }) } },
+    { name: "a scope names a few documents", indexReady: true, input: { ...request, scope: makeGraphSearchScope("approximate-test", { target: documentKeys([makeDocumentKey({ graph: "approximate-test", documentKind: "Work", encodedId: 1 })]) }) } },
     { name: "the profile dimensions differ", indexReady: true, input: { ...request, vector: [0.1, 0.2, 0.3, 0.4], embeddingProfile: defineEmbeddingProfile({ id: "approximate-test", version: "v1", dimensions: 4 }) } },
     { name: "the query overflows halfvec", indexReady: true, input: { ...request, vector: [70_000, 1, 1] } },
     { name: "the query collapses to zero in halfvec", indexReady: true, input: { ...request, vector: [1e-9, 1e-9, 1e-9] } },
@@ -132,6 +132,20 @@ describe("approximate semantic search", () => {
     expect(statement).toContain("FROM unnest(scoped.embedding")
     expect(statement).not.toContain("nearest AS MATERIALIZED")
     expect(queries.some((query) => query.text.includes("hnsw."))).toBe(false)
+  })
+
+  test("uses the index for a document-key scope larger than approximateAboveDocuments", async () => {
+    const { queries, transaction } = recordingTransaction(true)
+    const keys = [1, 2, 3].map((encodedId) => makeDocumentKey({ graph: "approximate-test", documentKind: "Work", encodedId }))
+    const [first, ...rest] = keys
+    if (first === undefined) throw new Error("No document keys")
+    await search({ transaction, vectorSearch: { ...approximate, approximateAboveDocuments: 2 } },
+      { ...request, scope: makeGraphSearchScope("approximate-test", { target: documentKeys([first, ...rest]) }) })
+    const statement = searchStatement(queries)
+
+    // The key filter runs inside the index scan's per-row scope check.
+    expect(statement).toContain("nearest AS MATERIALIZED")
+    expect(statement).toContain("r.document_key = ANY(")
   })
 
   test("checks index readiness once per cached discovery and not in exhaustive modes", async () => {
@@ -159,6 +173,8 @@ describe("approximate semantic search", () => {
     await expect(attempt({ ...approximate, representation: "vector", dimensions: 2_001 })).rejects.toThrow(RangeError)
     await expect(attempt({ ...approximate, index: "bad name" })).rejects.toThrow()
     await expect(attempt({ ...approximate, overfetch: 0 })).rejects.toThrow()
+    await expect(attempt({ ...approximate, approximateAboveDocuments: -1 })).rejects.toThrow()
+    await expect(attempt({ ...approximate, approximateAboveDocuments: 10_001 })).rejects.toThrow()
   })
 })
 

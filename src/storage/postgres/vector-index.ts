@@ -28,6 +28,7 @@ const ApproximateVectorSearchSchema = Schema.Struct({
   efSearch: Schema.optional(integer(1, 1_000)),
   overfetch: Schema.optional(integer(1, 20)),
   maxScanTuples: Schema.optional(integer(1, 1_000_000)),
+  approximateAboveDocuments: Schema.optional(integer(0, 10_000)),
 })
 
 /** Which embeddings the index covers and the element type it stores them as; queries and DDL must agree. */
@@ -42,6 +43,8 @@ export interface ApproximateVectorIndex extends IndexedEmbeddings {
   readonly efSearch: number
   readonly overfetch: number
   readonly maxScanTuples: number
+  /** Document-key scopes larger than this use the index; smaller ones score exhaustively. */
+  readonly approximateAboveDocuments: number
 }
 
 const checkIndexedEmbeddings = (dimensions: number, representation: VectorIndexRepresentation): IndexedEmbeddings => {
@@ -71,6 +74,7 @@ export const resolveVectorSearch = (input: PostgresDocumentGraphConfig["vectorSe
       efSearch: decoded.efSearch ?? 100,
       overfetch: decoded.overfetch ?? 4,
       maxScanTuples: decoded.maxScanTuples ?? 20_000,
+      approximateAboveDocuments: decoded.approximateAboveDocuments ?? 1_000,
     },
   }
 }

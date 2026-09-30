@@ -1920,10 +1920,14 @@ const makePostgresStorage = (
         : capabilities
 
       return discovered.pipe(Effect.flatMap((resolved) => {
-        // Document-key scopes are already narrow; exhaustive scoring is exact and cheap there.
+        // Small document-key scopes are exact and cheap to score exhaustively,
+        // and a very selective filter could exhaust the index scan. Large ones,
+        // such as every agency in a country, would read too many embeddings.
+        const target = request.scope.target
         const indexed = approximate !== undefined && resolved.approximateIndexReady &&
           Option.isSome(resolved.nativeNamespace) &&
-          request.scope.target._tag === "AllDocuments" &&
+          (target._tag === "AllDocuments" ||
+            (target._tag === "DocumentKeys" && target.documentKeys.length > approximate.approximateAboveDocuments)) &&
           request.embeddingProfile.dimensions === approximate.dimensions &&
           queryVectorFitsIndex(request.vector, approximate)
 
