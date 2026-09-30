@@ -28,6 +28,7 @@ import {
 import {
   makeGraphSearchScope,
   documentKeys,
+  MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS,
   InvalidSearchOutput,
   InvalidSearchQuery,
   noDocuments,
@@ -306,6 +307,22 @@ type GraphProjectionId<Documents extends DocumentDefinitions> = {
 const GraphRetrievalRouteConcurrency = 4
 
 const GraphNeighbourBatchSize = 100
+
+// Targets per topology read while resolving a retrieval scope. Each read
+// returns every related node for its targets, so larger batches trade query
+// size for fewer round trips over a population of thousands.
+const RetrievalScopeBatchSize = 500
+
+// Related documents read per target while resolving a scope: the largest
+// bounded traversal. A target that reaches it may have more, so resolution
+// fails as too large rather than keeping an arbitrary first thousand.
+const RetrievalScopeNeighbourLimit = Schema.decodeSync(GraphNeighbourLimitSchema)(1_000)
+
+// A scope's population becomes a document-key search target on every route.
+const RetrievalScopeDocumentsSchema = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({ minimum: 1, maximum: MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS }),
+)
 
 /** Optional graph-owned constraints for one semantic search. */
 export interface DocumentGraphSearchOptions<
@@ -750,6 +767,23 @@ type GraphRetrievalRelationServices<
   ? never
   : GraphTopologyStore
 
+/**
+ * A target population resolved once for one retrieval, then reused by any
+ * number of searches through `search(query, { within })`.
+ *
+ * Direct routes search only the targets' own documents. Relation routes
+ * search only source documents related to a target, which canonical topology
+ * resolves when the scope is created. The counts describe what was resolved.
+ */
+export interface GraphRetrievalScope<TargetKind extends string = string> {
+  readonly _tag: "GraphRetrievalScope"
+  readonly targetKind: TargetKind
+  /** Unique target documents in scope. */
+  readonly targets: number
+  /** Unique source documents relation routes may search, summed across routes. */
+  readonly relatedDocuments: number
+}
+
 /** Reusable target-oriented retrieval compiled from graph schema routes. */
 export interface GraphRetrievalHandle<
   GraphId extends string,
@@ -771,6 +805,12 @@ export interface GraphRetrievalHandle<
        * the channel that handles them best.
        */
       readonly textQuery?: string
+      /**
+       * Rank only targets in this population, resolved by `within` for this
+       * retrieval. Every route applies it inside the search provider, before
+       * candidate limits, so the whole budget goes to eligible documents.
+       */
+      readonly within?: GraphRetrievalScope<TargetKind>
     },
   ) => Effect.Effect<
     ReadonlyArray<
@@ -782,6 +822,24 @@ export interface GraphRetrievalHandle<
     SearchDocumentGraphError,
     | GraphRetrievalSearchServices<Strategy>
     | GraphRetrievalRelationServices<Routes>
+  >
+  /**
+   * Resolve a population of targets once, for any number of searches.
+   *
+   * Relation routes read canonical topology for the source documents related
+   * to each target. When the targets, or any route's related documents,
+   * exceed `maximumDocuments`, this fails with `scope_too_large` rather than
+   * searching an arbitrary subset; the bound is at most
+   * `MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS`. An empty population is valid and
+   * makes every search return nothing without embedding the query.
+   */
+  readonly within: (
+    targets: ReadonlyArray<DocumentId<Documents, TargetKind>>,
+    options: { readonly maximumDocuments: number },
+  ) => Effect.Effect<
+    GraphRetrievalScope<TargetKind>,
+    SearchDocumentGraphError,
+    GraphRetrievalRelationServices<Routes>
   >
 }
 
@@ -1282,6 +1340,7 @@ const bindDocumentGraph = <
     readonly projection: RegisteredVectorProjection
     readonly plan: RuntimeProjectionSearchPlan
     readonly where: ReadonlyArray<MetadataFilter>
+    readonly target?: GraphSearchTarget | undefined
   }): Effect.Effect<
     ReadonlyArray<AnyGraphSearchHit<GraphId, Documents>>,
     SearchGraphError | InvalidDocumentReference,
@@ -1313,6 +1372,7 @@ const bindDocumentGraph = <
           include: [inputSearch.documentKind],
           includeProjections: [inputSearch.projection.id],
           where: inputSearch.where,
+          target: inputSearch.target,
         },
         registered,
       )
@@ -2044,6 +2104,55 @@ const bindDocumentGraph = <
       readonly expanded: ReadonlyArray<ExpandedHit>
     }
 
+    /** What a public scope resolved to; only this retrieval can read it. */
+    type ResolvedScope = {
+      readonly targetKeys: ReadonlySet<DocumentKey>
+      readonly routes: ReadonlyMap<string, GraphSearchTarget>
+    }
+
+    const resolvedScopes = new WeakMap<GraphRetrievalScope<string>, ResolvedScope>()
+
+    const scopeTarget = (keys: ReadonlyArray<DocumentKey>): GraphSearchTarget => {
+      const [first, ...rest] = keys
+
+      return first === undefined ? noDocuments() : documentKeys([first, ...rest])
+    }
+
+    const scopeTooLarge = () => new InvalidSearchQuery({ reason: "scope_too_large" })
+
+    /** Source documents related to any target across one relation route, key-ordered. */
+    const relatedSourceKeys = (
+      route: RelationRetrievalRoute<string, string, string, string>,
+      targetKeys: ReadonlyArray<DocumentKey>,
+      maximumDocuments: number,
+    ) =>
+      Effect.gen(function*() {
+        const batches = Array.from(
+          { length: Math.ceil(targetKeys.length / RetrievalScopeBatchSize) },
+          (_, batch) => targetKeys.slice(batch * RetrievalScopeBatchSize, (batch + 1) * RetrievalScopeBatchSize),
+        )
+        const groups = yield* Effect.forEach(batches, (currentDocumentKeys) =>
+          findRuntimeNeighbours({
+            currentDocumentKeys,
+            currentDocumentKind: route.targetKind,
+            relationId: route.relation,
+            direction: "incoming",
+            limit: RetrievalScopeNeighbourLimit,
+          }), { concurrency: GraphRetrievalRouteConcurrency })
+        const flat = groups.flat()
+        if (flat.some(({ nodes }) => nodes.length >= RetrievalScopeNeighbourLimit)) return yield* scopeTooLarge()
+        const keys = [...new Set(flat.flatMap(({ nodes }) => nodes.map(({ documentKey }) => documentKey)))].sort()
+
+        return keys.length > maximumDocuments ? yield* scopeTooLarge() : keys
+      }).pipe(
+        Effect.catchTags({
+          GraphTopologyStoreFailed: failStoredOperation("retrieval_scope"),
+          InvalidDocumentIdentity: failDocumentGraphOperation("retrieval_scope", "invalid_stored_data"),
+          InvalidDocumentReference: failDocumentGraphOperation("retrieval_scope", "invalid_stored_data"),
+          InvalidGraphTopologyOutput: failDocumentGraphOperation("retrieval_scope", "invalid_stored_data"),
+        }),
+      )
+
     type RetainedEvidence = {
       readonly route: RetrievalRouteKey
       readonly source: SourceHit
@@ -2074,6 +2183,7 @@ const bindDocumentGraph = <
       query: string,
       plan: RuntimeProjectionSearchPlan,
       semanticQuery: SemanticQueryPreparation | undefined,
+      scope: ResolvedScope | undefined,
     ): Effect.Effect<
       ReadonlyArray<ExpandedRoute>,
       SearchDocumentGraphError,
@@ -2087,6 +2197,11 @@ const bindDocumentGraph = <
         (compiled) =>
           Effect.gen(function*() {
             const route = compiled.route
+            const target = scope?.routes.get(routeId(route))
+
+            if (target?._tag === "NoDocuments") {
+              return { route, expanded: [] }
+            }
 
             const hits = yield* exposeSearchOperation(
               searchProjectionRuntime({
@@ -2096,6 +2211,7 @@ const bindDocumentGraph = <
                 projection: compiled.projection,
                 plan,
                 where: [],
+                target,
               }),
               {
                 "document_graph.graph": input.id,
@@ -2163,11 +2279,14 @@ const bindDocumentGraph = <
             const neighbourEntries = neighbourBatches.flat()
             const neighboursBySource = new Map(neighbourEntries)
 
+            // A source may also relate to targets outside the scope, such as
+            // work credited to several agencies; only in-scope targets rank.
             return {
               route,
               expanded: hits.map((hit) => ({
                 hit,
-                targets: neighboursBySource.get(hit.documentKey) ?? [],
+                targets: (neighboursBySource.get(hit.documentKey) ?? []).filter((candidate) =>
+                  scope === undefined || scope.targetKeys.has(candidate.key)),
               })),
             }
           }),
@@ -2341,15 +2460,71 @@ const bindDocumentGraph = <
 
     const handle = {
       target: definition.target,
+      within: (
+        targets: ReadonlyArray<DocumentId<Documents, TargetKind>>,
+        options: { readonly maximumDocuments: number },
+      ) =>
+        Effect.gen(function*() {
+          const maximumDocuments = yield* parseRuntimeSearchOptions(() =>
+            Schema.decodeSync(RetrievalScopeDocumentsSchema)(options.maximumDocuments))
+          const resolvedKeys = yield* Effect.forEach(targets, (id) =>
+            parseRuntimeSearchOptions(() => ref(definition.target, id)).pipe(
+              Effect.flatMap(key),
+              Effect.mapError(() => new InvalidSearchQuery({ reason: "invalid_options" })),
+            ))
+          const targetKeys = [...new Set(resolvedKeys)].sort()
+
+          if (targetKeys.length > maximumDocuments) return yield* scopeTooLarge()
+
+          const routes = yield* Effect.forEach(compiledRoutes, ({ route }) =>
+            route._tag === "Direct"
+              ? Effect.succeed({ id: routeId(route), keys: targetKeys, related: false })
+              : relatedSourceKeys(route, targetKeys, maximumDocuments).pipe(
+                  Effect.map((keys) => ({ id: routeId(route), keys, related: true })),
+                ), { concurrency: GraphRetrievalRouteConcurrency })
+
+          const scope: GraphRetrievalScope<TargetKind> = {
+            _tag: "GraphRetrievalScope",
+            targetKind: definition.target,
+            targets: targetKeys.length,
+            relatedDocuments: routes.reduce((total, route) => total + (route.related ? route.keys.length : 0), 0),
+          }
+
+          resolvedScopes.set(scope, {
+            targetKeys: new Set(targetKeys),
+            routes: new Map(routes.map((route) => [route.id, scopeTarget(route.keys)])),
+          })
+
+          yield* Effect.annotateCurrentSpan({
+            "document_graph.scope.targets": scope.targets,
+            "document_graph.scope.related_documents": scope.relatedDocuments,
+          })
+
+          return scope
+        }).pipe(
+          traceDocumentGraphOperation("retrieval_scope", {
+            "document_graph.graph": input.id,
+            "document_graph.target_kind": definition.target,
+            "document_graph.search.route_count": compiledRoutes.length,
+          }),
+        ),
       search: (
         query: string,
         options?: {
           readonly limit?: number
           readonly candidates?: RetrievalCandidateBudgets
           readonly textQuery?: string
+          readonly within?: GraphRetrievalScope<TargetKind>
         },
       ) =>
         Effect.gen(function*() {
+          const scope = options?.within === undefined ? undefined : resolvedScopes.get(options.within)
+
+          // A scope from another retrieval would name different routes.
+          if (options?.within !== undefined && scope === undefined) {
+            return yield* new InvalidSearchQuery({ reason: "invalid_options" })
+          }
+
           const searchPlan = yield* parseRuntimeSearchOptions(() => {
             const requestedCandidates = {
               ...definition.candidates,
@@ -2393,6 +2568,10 @@ const bindDocumentGraph = <
             }
           })
 
+          if (scope !== undefined && scope.targetKeys.size === 0) {
+            return []
+          }
+
           yield* Effect.annotateCurrentSpan({
             "document_graph.search.semantic_candidates":
               searchPlan.semanticCandidates,
@@ -2411,6 +2590,7 @@ const bindDocumentGraph = <
             options?.textQuery ?? query,
             searchPlan.routePlan,
             semanticQuery,
+            scope,
           )
 
           return yield* assembleResults(

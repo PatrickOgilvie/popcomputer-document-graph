@@ -563,3 +563,114 @@ if (import.meta.url === "") {
   // @ts-expect-error Only schema-declared outgoing relations are available.
   WorkEvidence.through("unknown")
 }
+
+describe("retrieval scopes", () => {
+  const sharedWorkId = Schema.decodeSync(WorkId)("44444444-4444-4444-8444-444444444444")
+
+  const seedShared = WorkNode.index({
+    id: sharedWorkId,
+    title: "Shared campaign",
+    evidence: "National campaign credited to both studios.",
+    agencyIds: [agencyId, unrelatedAgencyId],
+  })
+
+  const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof live>>) =>
+    Effect.runPromise(Effect.gen(function*() {
+      yield* seed
+      return yield* effect
+    }).pipe(Effect.provide(live)))
+
+  const failureReason = <A>(result: Result.Result<A, SearchDocumentGraphError>) =>
+    Result.isFailure(result) && result.failure._tag === "InvalidSearchQuery" ? result.failure.reason : undefined
+
+  test("ranks only targets inside the scope, on direct and relation routes", async () => {
+    const [inside, outside] = await run(Effect.gen(function*() {
+      const north = yield* FindAgencies.within([agencyId], { maximumDocuments: 10 })
+      const local = yield* FindAgencies.within([unrelatedAgencyId], { maximumDocuments: 10 })
+
+      return [
+        yield* FindAgencies.search("national", { within: north }),
+        yield* FindAgencies.search("national", { within: local }),
+      ] as const
+    }))
+
+    expect(inside.map(({ target }) => target.id)).toEqual([agencyId])
+    expect(inside[0]?.evidence.map(({ source }) => source.reference.kind).sort()).toEqual(["Agency", "Work"])
+    expect(outside).toEqual([])
+  })
+
+  test("counts the targets and the related documents it resolved", async () => {
+    const scope = await run(FindAgencies.within([agencyId, agencyId], { maximumDocuments: 10 }))
+
+    expect(scope).toMatchObject({ _tag: "GraphRetrievalScope", targetKind: "Agency", targets: 1, relatedDocuments: 2 })
+  })
+
+  test("drops a co-credited target outside the scope", async () => {
+    const results = await run(Effect.gen(function*() {
+      yield* seedShared
+      const local = yield* FindAgencies.within([unrelatedAgencyId], { maximumDocuments: 10 })
+
+      return yield* FindAgencies.search("national", { within: local })
+    }))
+
+    expect(results.map(({ target }) => target.id)).toEqual([unrelatedAgencyId])
+  })
+
+  test("applies the scope to semantic channels too", async () => {
+    const results = await run(Effect.gen(function*() {
+      const local = yield* FindAgenciesWithHybridRoutes.within([unrelatedAgencyId], { maximumDocuments: 10 })
+
+      return yield* FindAgenciesWithHybridRoutes.search("national", { within: local })
+    }))
+
+    expect(results.map(({ target }) => target.id)).toEqual([unrelatedAgencyId])
+  })
+
+  test("an empty scope returns nothing without embedding the query", async () => {
+    const embedded: Array<string> = []
+    const recordingLive = Layer.mergeAll(
+      inMemoryDocumentGraph(),
+      Layer.succeed(EmbeddingProvider, { ...embeddings, embedQuery: (query) => {
+        embedded.push(query)
+        return Effect.succeed([1, 1])
+      } }),
+    )
+
+    const results = await Effect.runPromise(Effect.gen(function*() {
+      yield* seed
+      const nobody = yield* FindAgenciesWithHybridRoutes.within([], { maximumDocuments: 10 })
+
+      return yield* FindAgenciesWithHybridRoutes.search("national", { within: nobody })
+    }).pipe(Effect.provide(recordingLive)))
+
+    expect(results).toEqual([])
+    expect(embedded).toEqual([])
+  })
+
+  test("fails as too large rather than searching an arbitrary subset", async () => {
+    const [targets, related] = await run(Effect.all([
+      FindAgencies.within([agencyId, unrelatedAgencyId], { maximumDocuments: 1 }).pipe(Effect.result),
+      // North Studio delivered two works, so its relation route needs two documents.
+      FindAgencies.within([agencyId], { maximumDocuments: 1 }).pipe(Effect.result),
+    ]))
+
+    expect(failureReason(targets)).toBe("scope_too_large")
+    expect(failureReason(related)).toBe("scope_too_large")
+  })
+
+  test("rejects an invalid bound and a scope resolved for another retrieval", async () => {
+    const [unbounded, oversized, foreign] = await run(Effect.gen(function*() {
+      const direct = yield* FindAgenciesDirectly.within([agencyId], { maximumDocuments: 10 })
+
+      return [
+        yield* FindAgencies.within([agencyId], { maximumDocuments: 0 }).pipe(Effect.result),
+        yield* FindAgencies.within([agencyId], { maximumDocuments: 10_001 }).pipe(Effect.result),
+        yield* FindAgencies.search("national", { within: direct }).pipe(Effect.result),
+      ] as const
+    }))
+
+    expect(failureReason(unbounded)).toBe("invalid_options")
+    expect(failureReason(oversized)).toBe("invalid_options")
+    expect(failureReason(foreign)).toBe("invalid_options")
+  })
+})

@@ -490,6 +490,7 @@ export class InvalidSearchQuery extends Schema.TaggedError<
     "too_long",
     "text_disabled",
     "invalid_options",
+    "scope_too_large",
   ]),
 }) {}
 

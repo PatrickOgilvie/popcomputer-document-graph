@@ -703,6 +703,37 @@ const agencies = yield* FindAgencies.search(
 )
 ```
 
+When the application already knows which targets are eligible, such as the
+agencies based in one country, resolve that population once with `within` and
+pass it to any number of searches:
+
+```ts
+const inCountry = yield* FindAgencies.within(ukAgencyIds, {
+  maximumDocuments: 10_000,
+})
+
+const agencies = yield* FindAgencies.search("close-up food photography", {
+  limit: 6,
+  within: inCountry,
+})
+```
+
+Direct routes search only the targets' own documents. Relation routes search
+only source documents related to a target: `within` reads canonical topology
+once per route, so only those agencies' Work evidence competes for the
+candidate budget. The adapter applies the population inside its semantic and
+text queries, before candidate limits, rather than filtering a globally ranked
+list, so a narrow population is not crowded out by better matches outside it.
+A source related to several targets ranks only the ones in scope.
+
+`maximumDocuments` bounds every route's population, up to
+`MAX_GRAPH_SEARCH_TARGET_DOCUMENT_KEYS` (10,000). A larger population fails
+with `InvalidSearchQuery` reason `scope_too_large` instead of searching an
+arbitrary subset, so the caller can fall back deliberately, for example to an
+unscoped search. An empty population is valid: searches within it return
+nothing without embedding the query. A scope belongs to the retrieval that
+resolved it, and another retrieval rejects it.
+
 Each route discovers its own candidates before target ranking is fused. Agency
 profiles and related Work evidence can therefore each introduce a relevant
 Agency. Relationship expansion groups up to 100 distinct source documents into
@@ -1271,8 +1302,8 @@ same `index`, `dimensions` and `representation` to both calls; the query must
 repeat the indexed expression exactly for PostgreSQL to use it. `halfvec`, the
 default, stores two bytes per dimension. Its predicate skips vectors outside
 halfvec's range, so those rows stay writable and exhaustive search still finds
-them for document-key scopes. Use `representation: "vector"` for float32 index
-entries.
+them for small document-key scopes. Use `representation: "vector"` for float32
+index entries.
 
 Searches take the nearest `candidates × overfetch` chunks (default 4×) from
 the index with `hnsw.iterative_scan = relaxed_order`, applying graph,
@@ -1281,8 +1312,16 @@ exactly in float64 and return the requested count, so scores and ties match
 `vectorSearch: "float64"`. Only recall is approximate. The
 adapter checks the index is valid and maintained before using it, so a missing
 index, a build in progress, or a failed build falls back to exhaustive search.
-Document-key scopes, other dimensions and query vectors outside the index
-type's range also search exhaustively.
+Other dimensions and query vectors outside the index type's range also search
+exhaustively.
+
+Document-key scopes, such as a retrieval `within` population, use the index
+when they name more than `approximateAboveDocuments` documents (default
+1,000), with the key filter applied during the scan. Smaller scopes are scored
+exhaustively: exhaustive scoring reads every embedding in scope, which suits a
+few hundred documents, and a very selective filter can exhaust
+`maxScanTuples` before the index finds enough scoped chunks. Set it to 0 to
+send every document-key scope to the index.
 
 A failed concurrent build leaves an invalid index that writes still maintain.
 Drop it with `DROP INDEX CONCURRENTLY` before retrying. Building needs roughly

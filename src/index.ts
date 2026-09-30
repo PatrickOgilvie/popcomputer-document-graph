@@ -45,6 +45,7 @@ export {
   type GraphDocumentHandle,
   type GraphProjectionHandle,
   type GraphRetrievalHandle,
+  type GraphRetrievalScope,
   type GraphRetrievalResult,
   type GraphSearchHit,
   type IndexGraphDocumentError,

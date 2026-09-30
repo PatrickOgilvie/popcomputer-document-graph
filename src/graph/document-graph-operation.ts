@@ -7,6 +7,7 @@ export const DocumentGraphOperationSchema = Schema.Literals([
   "reconcile_index",
   "search",
   "search_within",
+  "retrieval_scope",
   "hydrate",
   "nodes",
   "related_nodes",
