@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.5.0 - 2026-09-30
+
+Approximate PostgreSQL semantic search through a pgvector HNSW expression
+index, and server-side search timeouts.
+
+### Added
+
+- `vectorSearch: { mode: "approximate", index, dimensions }` takes whole-graph
+  semantic candidates from a pgvector HNSW index, applying scope during the
+  index scan with iterative scanning, then rescores them exactly in float64,
+  so scores and ties match `"float64"` search. Only recall is approximate. Document-key scopes, other dimensions, out-of-range query
+  vectors, and a missing, building, or invalid index keep exhaustive `"auto"`
+  scoring. Index readiness is discovered and cached with pgvector detection.
+- `postgresVectorIndexSql()` returns the matching `CREATE INDEX CONCURRENTLY`
+  statement. It indexes an expression over the canonical float64 arrays, so no
+  column, table rewrite, or backfill is needed. `halfvec` (default) halves the
+  index size; `vector` keeps float32.
+- `searchTimeoutMilliseconds` sets `statement_timeout` for each semantic and
+  text search, so PostgreSQL cancels a search its caller has abandoned.
+- Migration `0005_native_halfvec_eligibility.sql` adds the halfvec range guard
+  the halfvec index predicate uses.
+- Graph retrieval `search(query, { textQuery })` sends a separate query to text
+  channels, such as quoted key phrases joined with OR, while semantic channels
+  still embed `query`.
+- `textSearchTimeoutMilliseconds` makes PostgreSQL text search best effort: a
+  text search cancelled at that budget returns no candidates, so hybrid
+  retrieval continues on its semantic channel.
+
+### Changed
+
+- PostgreSQL text search ranks all matches on the stored combined vector, then
+  applies the exact per-field weights to the best four per requested candidate,
+  instead of re-tokenising every match. Common phrases no longer turn one text
+  search into thousands of per-row `to_tsvector` calls.
+
+- Searches that need transaction-local settings run in a read-only
+  transaction in pool mode, or a savepoint that is rolled back in transaction
+  mode, so settings never leak into the caller's transaction. Searches without
+  settings issue the same single statement as before.
+
 ## 0.4.1 - 2026-09-12
 
 Validation fixes and internal cleanup following a one-off audit with
