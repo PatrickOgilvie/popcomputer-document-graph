@@ -8,6 +8,16 @@ export {
 } from "./storage/postgres/connection.js"
 
 export type {
+  PostgresApproximateVectorSearch,
   PostgresDocumentGraphConfig,
   PostgresQueryClient,
 } from "./storage/postgres/connection.js"
+
+export {
+  postgresVectorIndexSql,
+} from "./storage/postgres/vector-index.js"
+
+export type {
+  PostgresVectorIndexSqlOptions,
+  VectorIndexRepresentation,
+} from "./storage/postgres/vector-index.js"

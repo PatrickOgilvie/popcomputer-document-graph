@@ -70,10 +70,20 @@ import {
   connectionFor,
   queryRows,
   transactionEffect,
+  withReadSettings,
   type PostgresDocumentGraphConfig,
   type PostgresQueryable as Queryable,
+  type PostgresReadSetting,
   type PostgresTransactionClient as TransactionClient,
 } from "./connection.js"
+import {
+  approximateIndexReadySql,
+  indexedEmbeddingSql,
+  indexedRowsSql,
+  queryVectorFitsIndex,
+  resolveVectorSearch,
+  type ApproximateVectorIndex,
+} from "./vector-index.js"
 
 const DefaultSchema = "honertia_document_graph"
 
@@ -990,13 +1000,74 @@ const discoverPgvectorNamespace = (connection: Queryable) => Effect.tryPromise({
   catch: searchFailure,
 })
 
+interface VectorCapabilities {
+  readonly nativeNamespace: Option.Option<string>
+  /** The configured approximate index exists, is HNSW, and is valid and maintained. */
+  readonly approximateIndexReady: boolean
+}
+
+const noVectorCapabilities: VectorCapabilities = { nativeNamespace: Option.none(), approximateIndexReady: false }
+
+const IndexReadyRowSchema = Schema.Struct({ ready: Schema.Boolean })
+
+// A failed or in-progress CREATE INDEX CONCURRENTLY leaves an invalid index,
+// so readiness is checked rather than assumed from configuration.
+const discoverVectorCapabilities = (
+  connection: Queryable,
+  schema: string,
+  approximate: ApproximateVectorIndex | undefined,
+) => discoverPgvectorNamespace(connection).pipe(Effect.flatMap((nativeNamespace) =>
+  approximate === undefined || Option.isNone(nativeNamespace)
+    ? Effect.succeed({ nativeNamespace, approximateIndexReady: false })
+    : Effect.tryPromise({
+        try: async () => {
+          const rows = await queryRows<Schema.Codec.Encoded<typeof IndexReadyRowSchema>>(
+            connection, approximateIndexReadySql, [schema, approximate.index],
+          )
+
+          const row = rows[0]
+
+          return {
+            nativeNamespace,
+            approximateIndexReady: row !== undefined && parseRow(IndexReadyRowSchema, row, "vector index readiness").ready,
+          }
+        },
+        catch: searchFailure,
+      })))
+
+/**
+ * Exhaustive plans score every chunk in scope. Approximate plans take the
+ * nearest chunks from the HNSW index, applying scope during the index scan,
+ * then rescore those exactly in float64.
+ */
+type SemanticSearchPlan =
+  | { readonly _tag: "Exhaustive"; readonly nativeNamespace: Option.Option<string> }
+  | {
+      readonly _tag: "Approximate"
+      readonly nativeNamespace: string
+      readonly graphNamespace: string
+      readonly index: ApproximateVectorIndex
+    }
+
+const scopedColumns = (nativeNamespace: Option.Option<string>): string =>
+  `c.chunk_id, c.document_key, c.section_key, c.section_part,
+              c.content,
+              c.has_metadata, c.metadata, c.embedding,
+              ${Option.isSome(nativeNamespace) ? "c.embedding_native_eligible," : ""}
+              r.graph_id, r.document_kind, r.encoded_document_id,
+              r.projection_id, r.projection_version, r.revision_hash`
+
 const searchCandidates = async (
   connection: Queryable,
   tables: { readonly revisions: string; readonly chunks: string },
   request: SemanticCandidateRequest,
-  nativeNamespace: Option.Option<string>,
+  plan: SemanticSearchPlan,
 ): Promise<ReadonlyArray<SemanticSearchCandidate>> => {
   if (request.scope.target._tag === "NoDocuments") return []
+
+  // Index candidates are few, so they are rescored in float64: scores and ties
+  // match the exhaustive float64 path whenever recall is complete.
+  const nativeNamespace = plan._tag === "Approximate" ? Option.none<string>() : plan.nativeNamespace
 
   const values: Array<unknown> = [
     [...request.vector],
@@ -1029,6 +1100,49 @@ const searchCandidates = async (
        ELSE ${float64Score} END`
     : float64Score
 
+  let scoped: string
+
+  if (plan._tag === "Approximate") {
+    const vector = plan.nativeNamespace
+    values.push(Math.min(10_000, request.candidates * plan.index.overfetch))
+
+    // The scalar subquery keeps scope as a per-row filter on the index scan;
+    // as a join, PostgreSQL could scan and sort every chunk instead.
+    scoped = `nearest AS MATERIALIZED (
+       SELECT c.chunk_id
+       FROM ${tables.chunks} AS c
+       WHERE ${indexedRowsSql("c", plan.graphNamespace, plan.index)}
+         AND coalesce((
+           SELECT TRUE
+           FROM ${tables.revisions} AS r
+           WHERE r.document_key = c.document_key
+             AND r.projection_id = c.projection_id
+             AND ${filters.join("\n             AND ")}
+           LIMIT 1
+         ), FALSE)
+       ORDER BY ${indexedEmbeddingSql("c", vector, plan.index)}
+         OPERATOR(${vector}.<=>) ($1::double precision[]::${vector}.${plan.index.representation}(${plan.index.dimensions}))
+       LIMIT $${values.length}
+     ),
+     scoped AS MATERIALIZED (
+       SELECT ${scopedColumns(nativeNamespace)}
+       FROM nearest
+       INNER JOIN ${tables.chunks} AS c ON c.chunk_id = nearest.chunk_id
+       INNER JOIN ${tables.revisions} AS r
+         ON r.document_key = c.document_key
+        AND r.projection_id = c.projection_id
+     )`
+  } else {
+    scoped = `scoped AS MATERIALIZED (
+       SELECT ${scopedColumns(nativeNamespace)}
+       FROM ${tables.chunks} AS c
+       INNER JOIN ${tables.revisions} AS r
+         ON r.document_key = c.document_key
+        AND r.projection_id = c.projection_id
+       WHERE ${filters.join("\n         AND ")}
+     )`
+  }
+
   values.push(request.candidates)
 
   const rows = await queryRows<SearchCandidateRow>(
@@ -1037,19 +1151,7 @@ const searchCandidates = async (
        SELECT sqrt(sum(component * component)) AS norm
        FROM unnest($1::double precision[]) AS component
      ),
-     scoped AS MATERIALIZED (
-       SELECT c.chunk_id, c.document_key, c.section_key, c.section_part,
-              c.content,
-              c.has_metadata, c.metadata, c.embedding,
-              ${Option.isSome(nativeNamespace) ? "c.embedding_native_eligible," : ""}
-              r.graph_id, r.document_kind, r.encoded_document_id,
-              r.projection_id, r.projection_version, r.revision_hash
-       FROM ${tables.chunks} AS c
-       INNER JOIN ${tables.revisions} AS r
-         ON r.document_key = c.document_key
-        AND r.projection_id = c.projection_id
-       WHERE ${filters.join("\n         AND ")}
-     ),
+     ${scoped},
      scored AS MATERIALIZED (
        SELECT scoped.chunk_id, scoped.document_key, scoped.section_key, scoped.section_part,
               scoped.content, scoped.has_metadata, scoped.metadata,
@@ -1658,16 +1760,36 @@ const namedPostgresOperation = <
     return yield* operation(...args)
   })
 
+interface ResolvedPostgresOptions {
+  readonly schema: string
+  readonly vectorSearch: "auto" | "float64" | "approximate"
+  readonly approximate: ApproximateVectorIndex | undefined
+  readonly searchSettings: ReadonlyArray<PostgresReadSetting>
+}
+
+const SearchTimeoutSchema = Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 2_147_483_647 }))
+
+const resolvePostgresOptions = (config: PostgresDocumentGraphConfig): ResolvedPostgresOptions => {
+  const vectorSearch = resolveVectorSearch(config.vectorSearch)
+  const timeout = config.searchTimeoutMilliseconds
+
+  return {
+    schema: Schema.decodeSync(PostgresSchemaNameSchema)(config.schema ?? DefaultSchema),
+    vectorSearch: vectorSearch.mode,
+    approximate: vectorSearch.mode === "approximate" ? vectorSearch.index : undefined,
+    searchSettings: timeout === undefined
+      ? []
+      : [["statement_timeout", String(Schema.decodeSync(SearchTimeoutSchema)(timeout))]],
+  }
+}
+
 const makePostgresStorage = (
   config: PostgresDocumentGraphConfig,
-  nativeNamespace: Effect.Effect<Option.Option<string>, ProjectionSearchStoreFailed>,
+  options: ResolvedPostgresOptions,
+  capabilities: Effect.Effect<VectorCapabilities, ProjectionSearchStoreFailed>,
 ): DocumentGraphStorageService => {
-  const schema = Schema.decodeSync(PostgresSchemaNameSchema)(
-    config.schema ?? DefaultSchema,
-  )
-
+  const { schema, vectorSearch, approximate, searchSettings } = options
   const namespace = quoteIdentifier(schema)
-  const vectorSearch = Schema.decodeSync(Schema.Literals(["auto", "float64"]))(config.vectorSearch ?? "auto")
 
   const tables: PostgresTables = {
     revisions: `${namespace}."projected_revisions"`,
@@ -1764,20 +1886,44 @@ const makePostgresStorage = (
     searchCandidates: (request) => {
       if (request.scope.target._tag === "NoDocuments") return Effect.succeed([])
 
-      const namespace = vectorSearch === "float64" || !nativeQueryEligible(request.vector)
-        ? Effect.succeed(Option.none<string>())
-        : nativeNamespace
+      const discovered = vectorSearch === "float64" || !nativeQueryEligible(request.vector)
+        ? Effect.succeed(noVectorCapabilities)
+        : capabilities
 
-      return namespace.pipe(Effect.flatMap((resolved) => Effect.tryPromise({
-        try: () => searchCandidates(connectionFor(config), tables, request, resolved),
-        catch: searchFailure,
-      })))
+      return discovered.pipe(Effect.flatMap((resolved) => {
+        // Document-key scopes are already narrow; exhaustive scoring is exact and cheap there.
+        const indexed = approximate !== undefined && resolved.approximateIndexReady &&
+          Option.isSome(resolved.nativeNamespace) &&
+          request.scope.target._tag === "AllDocuments" &&
+          request.embeddingProfile.dimensions === approximate.dimensions &&
+          queryVectorFitsIndex(request.vector, approximate)
+
+        const plan: SemanticSearchPlan = indexed && Option.isSome(resolved.nativeNamespace)
+          ? { _tag: "Approximate", nativeNamespace: resolved.nativeNamespace.value, graphNamespace: namespace, index: approximate }
+          : { _tag: "Exhaustive", nativeNamespace: resolved.nativeNamespace }
+
+        const settings: ReadonlyArray<PostgresReadSetting> = plan._tag === "Approximate"
+          ? [
+              // relaxed_order keeps scanning past candidates that scope filters discard;
+              // exact rescoring restores the final order.
+              ["hnsw.iterative_scan", "relaxed_order"],
+              ["hnsw.ef_search", String(Math.min(1_000, Math.max(plan.index.efSearch, request.candidates * plan.index.overfetch)))],
+              ["hnsw.max_scan_tuples", String(plan.index.maxScanTuples)],
+              ...searchSettings,
+            ]
+          : searchSettings
+
+        return Effect.tryPromise({
+          try: () => withReadSettings(config, settings, (client) => searchCandidates(client, tables, request, plan)),
+          catch: searchFailure,
+        })
+      }))
     },
 
     searchTextCandidates: (request) =>
       Effect.tryPromise({
         try: () =>
-          searchTextCandidates(connectionFor(config), tables, request),
+          withReadSettings(config, searchSettings, (client) => searchTextCandidates(client, tables, request)),
         catch: textSearchFailure,
       }),
 
@@ -1894,12 +2040,13 @@ export const postgresDocumentGraph = (
   config: PostgresDocumentGraphConfig,
 ): ReturnType<typeof makeDocumentGraphStorage> =>
   Layer.unwrap(Effect.gen(function*() {
+    const options = resolvePostgresOptions(config)
     // Exit-aware TTL prevents a transient connection failure from poisoning
     // the capability cache. Concurrent routes share one discovery request.
     const capabilities = yield* Cache.makeWith(
-      () => discoverPgvectorNamespace(connectionFor(config)),
+      () => discoverVectorCapabilities(connectionFor(config), options.schema, options.approximate),
       { capacity: 1, timeToLive: (exit) => Exit.isSuccess(exit) ? "5 minutes" : 0 },
     )
 
-    return makeDocumentGraphStorage(makePostgresStorage(config, Cache.get(capabilities, "pgvector")))
+    return makeDocumentGraphStorage(makePostgresStorage(config, options, Cache.get(capabilities, "pgvector")))
   }))

@@ -1237,6 +1237,50 @@ Both paths perform exhaustive cosine search. The float64 path calculates the
 query norm once per search. Measure representative latency before selecting
 an approximate vector adapter for larger datasets.
 
+### Approximate search with an HNSW index
+
+Exhaustive search reads every embedding in scope, so its latency grows with the
+corpus. With pgvector 0.8 or later, an HNSW index serves whole-graph searches
+from a small part of the corpus instead:
+
+```ts
+const approximate = { mode: "approximate", index: "projected_chunks_embedding_hnsw", dimensions: 1024 } as const
+
+// Once, outside a transaction, after migration 0005:
+await pool.query(postgresVectorIndexSql({ index: approximate.index, dimensions: approximate.dimensions }))
+
+const StorageLive = postgresDocumentGraph({ pool, vectorSearch: approximate, searchTimeoutMilliseconds: 3_000 })
+```
+
+`postgresVectorIndexSql` indexes an expression over the canonical float64
+arrays, so it adds no column and needs no backfill. It builds with
+`CREATE INDEX CONCURRENTLY`, which does not block reads or writes. Pass the
+same `index`, `dimensions` and `representation` to both calls; the query must
+repeat the indexed expression exactly for PostgreSQL to use it. `halfvec`, the
+default, stores two bytes per dimension. Its predicate skips vectors outside
+halfvec's range, so those rows stay writable and exhaustive search still finds
+them for document-key scopes. Use `representation: "vector"` for float32 index
+entries.
+
+Searches take the nearest `candidates × overfetch` chunks (default 4×) from
+the index with `hnsw.iterative_scan = relaxed_order`, applying graph,
+projection, metadata and profile filters during the scan, then rescore them
+exactly in float64 and return the requested count, so scores and ties match
+`vectorSearch: "float64"`. Only recall is approximate. The
+adapter checks the index is valid and maintained before using it, so a missing
+index, a build in progress, or a failed build falls back to exhaustive search.
+Document-key scopes, other dimensions and query vectors outside the index
+type's range also search exhaustively.
+
+A failed concurrent build leaves an invalid index that writes still maintain.
+Drop it with `DROP INDEX CONCURRENTLY` before retrying. Building needs roughly
+the index size in `maintenance_work_mem` to stay in memory; below that pgvector
+builds on disk, much more slowly.
+
+`searchTimeoutMilliseconds` applies to every semantic and text search, with or
+without an index. PostgreSQL cancels the statement itself, so a search its
+caller abandoned does not keep running.
+
 The repository includes a reproducible comparison of the previous cosine
 query and the optimized query, plus document-key filtering:
 
