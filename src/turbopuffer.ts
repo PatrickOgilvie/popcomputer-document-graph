@@ -27,6 +27,7 @@ export {
   officialTurbopufferClient,
   makeOfficialTurbopufferClient,
   TurbopufferClient,
+  type OfficialTurbopufferClient,
   type TurbopufferClientConfig,
   type TurbopufferClientService,
 } from "./storage/turbopuffer/client.js"
@@ -141,6 +142,7 @@ export {
   makeTurbopufferProjectionSearchStores,
   turbopufferProjectionSearch,
   type TurbopufferProjectionSearchConfig,
+  type TurbopufferSearchCoalescing,
   type TurbopufferProjectionSearchStores,
 } from "./storage/turbopuffer/projection-search.js"
 
@@ -180,3 +182,5 @@ export {
   type TurbopufferRowKind,
   type TurbopufferTombstoneRow,
 } from "./storage/turbopuffer/row-codec.js"
+
+export { encodeTurbopufferVector } from "./storage/turbopuffer/vector-encoding.js"

@@ -35,6 +35,7 @@ interface RecordedRequest {
   readonly url: string
   readonly method: string
   readonly authorization: string | null
+  readonly acceptEncoding: string | null
 }
 
 interface ProviderResponseFixture {
@@ -98,6 +99,7 @@ const recordingFetch = (
       url: requestUrl(input),
       method: init?.method ?? "GET",
       authorization: new Headers(init?.headers).get("authorization"),
+      acceptEncoding: new Headers(init?.headers).get("accept-encoding"),
     }
 
     requests.push(request)
@@ -225,6 +227,24 @@ describe("Turbopuffer client boundary", () => {
       expect(String(cause)).not.toContain("sensitive-client-test-key")
       expect(JSON.stringify(cause)).not.toContain("sensitive-client-test-key")
     }
+  })
+
+  test("asks for gzipped responses without compressing requests", async () => {
+    const requests: Array<RecordedRequest> = []
+    const client = makeOfficialTurbopufferClient(clientConfig(recordingFetch(requests)))
+
+    const plain: Array<RecordedRequest> = []
+
+    const uncompressed = makeOfficialTurbopufferClient({
+      ...clientConfig(recordingFetch(plain)),
+      compressResponses: false,
+    })
+
+    await Effect.runPromise(client.query({ rank_by: ["id", "asc"] }))
+    await Effect.runPromise(uncompressed.query({ rank_by: ["id", "asc"] }))
+
+    expect(requests[0]?.acceptEncoding).toBe("gzip")
+    expect(plain[0]?.acceptEncoding).toBe("identity")
   })
 
   test("keeps the configured API key authoritative over ambient custom headers", async () => {

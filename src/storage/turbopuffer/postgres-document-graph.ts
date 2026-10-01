@@ -1,11 +1,15 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import type { Pool } from "pg"
 import { GraphTopologyStore } from "../../graph/graph-topology.js"
 import type { EmbeddingProfile } from "../../indexing/embedding-provider.js"
 import type { PostgresSearchCoalescing } from "../postgres/connection.js"
 import { postgresProjectionPublicationCoordinator } from "../postgres/projection-publication.js"
 import { postgresDocumentGraph } from "../postgres/runtime.js"
-import type { InvalidTurbopufferConfiguration } from "./errors.js"
+import { makeOfficialTurbopufferClient } from "./client.js"
+import {
+  InvalidTurbopufferConfiguration,
+  type TurbopufferTransportFailed,
+} from "./errors.js"
 import type { TurbopufferWorkspacePartition } from "./partition.js"
 import {
   turbopufferProviderPartition,
@@ -47,6 +51,8 @@ export interface TurbopufferPostgresDocumentGraph {
     TurbopufferPostgresDocumentGraphServices,
     InvalidTurbopufferConfiguration
   >
+  /** Load the namespace into Turbopuffer's cache ahead of the first search. */
+  readonly warmCache: Effect.Effect<void, TurbopufferTransportFailed | InvalidTurbopufferConfiguration>
 }
 
 /**
@@ -87,8 +93,22 @@ export const makeTurbopufferPostgresDocumentGraph = (
     coalesceSearches: config.postgres.coalesceSearches,
   })))
 
+  const warmCache = Effect.try({
+    try: () => makeOfficialTurbopufferClient({
+      apiKey: config.turbopuffer.apiKey,
+      partition,
+      timeoutMilliseconds: config.turbopuffer.timeoutMilliseconds,
+      retries: 0,
+      fetch: config.turbopuffer.fetch,
+    }),
+    catch: (cause) => Schema.is(InvalidTurbopufferConfiguration)(cause)
+      ? cause
+      : new InvalidTurbopufferConfiguration({ field: "partition", reason: "invalid_value" }),
+  }).pipe(Effect.flatMap((client) => client.warmCache()))
+
   return {
     partition,
+    warmCache,
     layer: Layer.mergeAll(
       topology,
       turbopufferProviderStorage({

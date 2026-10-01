@@ -21,6 +21,8 @@ export class InvalidTurbopufferConfiguration extends Schema.TaggedError<
     "retained_publication_history",
     "consistency",
     "coalesce_writes",
+    "chunks_per_document",
+    "coalesce_searches",
   ]),
   reason: Schema.Literals(["invalid_value", "mismatch"]),
 }) {}
@@ -36,6 +38,7 @@ export class TurbopufferTransportFailed extends Schema.TaggedError<
     "inspect_schema",
     "update_schema",
     "destroy_namespace",
+    "hint_cache_warm",
   ]),
   reason: Schema.Literals([
     "unavailable",

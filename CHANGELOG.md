@@ -20,6 +20,14 @@ Turbopuffer retrieval with PostgreSQL topology and journal.
 - Turbopuffer text search reads web-search syntax: BM25 ranks every positive
   word, and a query of quoted phrases requires one alternative's phrases, as
   PostgreSQL's `websearch_to_tsquery` does.
+- Turbopuffer search options:
+  - `candidateVerification: "provider"` trusts live rows (each publication
+    writes a document's rows atomically), so search never reads the journal.
+  - `coalesceSearches` packs searches that arrive together into multi-queries
+    of up to 16 subqueries.
+  - `chunksPerDocument` caps each document's chunks per channel.
+- `OfficialTurbopufferClient.warmCache` and the composition's `warmCache` load
+  a namespace into Turbopuffer's cache ahead of the first search.
 
 ### Changed
 
@@ -28,6 +36,9 @@ Turbopuffer retrieval with PostgreSQL topology and journal.
 - English Turbopuffer full-text fields are stemmed and drop stopwords, matching
   PostgreSQL's `english` configuration. Existing namespaces rebuild those
   indexes in place.
+- The Turbopuffer client asks for gzipped responses (`compressResponses`,
+  default on) and sends query vectors as base64, cutting search transfer about
+  fourfold.
 
 ## 0.7.0 - 2026-09-30
 

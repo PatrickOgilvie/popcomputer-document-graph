@@ -66,6 +66,12 @@ export interface TurbopufferD1WorkspaceProviderConfig {
   readonly coalesceWrites?: TurbopufferWriteCoalescing | undefined
   /** Retrieval consistency; defaults to strong. */
   readonly consistency?: TurbopufferQueryConsistency | undefined
+  /** How search confirms candidates are current; defaults to the journal. */
+  readonly candidateVerification?: TurbopufferProjectionSearchConfig["candidateVerification"]
+  /** Most chunks one document contributes to a channel's candidates. */
+  readonly chunksPerDocument?: number | undefined
+  /** Share multi-query requests among searches that arrive together. */
+  readonly coalesceSearches?: TurbopufferProjectionSearchConfig["coalesceSearches"]
   /** Diagnostic deadline for an unreconciled publication. */
   readonly publicationLeaseMilliseconds?: number | undefined
   /** Completed publication journal entries retained per projection. */
@@ -210,6 +216,9 @@ export const turbopufferProviderStorage = (input: {
   const searchConfig: TurbopufferProjectionSearchConfig = {
     partition: input.partition,
     consistency: input.turbopuffer.consistency,
+    candidateVerification: input.turbopuffer.candidateVerification,
+    chunksPerDocument: input.turbopuffer.chunksPerDocument,
+    coalesceSearches: input.turbopuffer.coalesceSearches,
   }
 
   return Layer.mergeAll(

@@ -12,6 +12,7 @@ import {
 } from "./metadata-terms.js"
 import type { TurbopufferWorkspacePartition } from "./partition.js"
 import { TurbopufferSearchResultAttributes } from "./row-codec.js"
+import { encodeTurbopufferVector } from "./vector-encoding.js"
 
 /** Namespace partition fields that every retrieval query must constrain. */
 export type TurbopufferQueryPartition = TurbopufferWorkspacePartition
@@ -177,12 +178,30 @@ const executableQuery = (
   query: TurbopufferSerializedQuery,
 ): TurbopufferExecutableQuery => ({ _tag: "Query", query })
 
+/**
+ * How many rows a query returns. A per-document cap stops one long document
+ * from filling a channel, so the same budget reaches more documents.
+ */
+const resultLimit = (
+  candidates: SearchResultCount,
+  chunksPerDocument: number | undefined,
+): Pick<TurbopufferSerializedQuery, "top_k" | "limit"> =>
+  chunksPerDocument === undefined
+    ? { top_k: candidates }
+    : {
+        limit: {
+          total: candidates,
+          per: { attributes: ["document_key"], limit: chunksPerDocument },
+        },
+      }
+
 /** Compile ANN retrieval with cosine distance and all graph constraints pushed down. */
 export const compileTurbopufferSemanticQuery = (input: {
   readonly scope: GraphSearchScope
   readonly partition: TurbopufferQueryPartition
   readonly queryVector: ReadonlyArray<number>
   readonly candidates: SearchResultCount
+  readonly chunksPerDocument?: number | undefined
 }): CompiledTurbopufferQuery => {
   const filters = compileCommonFilter(input)
 
@@ -199,9 +218,17 @@ export const compileTurbopufferSemanticQuery = (input: {
 
   return executableQuery({
     distance_metric: "cosine_distance",
-    rank_by: ["vector", "ANN", [...input.queryVector]],
+    // SAFETY: the API accepts any vector as base64 little-endian float32, in
+    // queries as in writes, and ranks identically; the SDK types only the
+    // JSON array form. The encoded vector is a quarter of the request bytes.
+    // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- The SDK's RankBy type cannot express the documented base64 vector form, so the wire value is asserted at this single provider boundary.
+    rank_by: [
+      "vector",
+      "ANN",
+      encodeTurbopufferVector(input.queryVector),
+    ] as unknown as NonNullable<TurbopufferSerializedQuery["rank_by"]>,
     filters,
-    top_k: input.candidates,
+    ...resultLimit(input.candidates, input.chunksPerDocument),
     include_attributes: [...TurbopufferSearchResultAttributes],
   })
 }
@@ -358,6 +385,7 @@ export const compileTurbopufferTextQuery = (input: {
   readonly query: string
   readonly policy: EnabledTextSearchPolicy
   readonly candidates: SearchResultCount
+  readonly chunksPerDocument?: number | undefined
 }): CompiledTurbopufferQuery => {
   const filters = compileCommonFilter(input)
 
@@ -371,7 +399,7 @@ export const compileTurbopufferTextQuery = (input: {
       input.policy,
     ),
     filters: phrases === undefined ? filters : ["And", [filters, phrases]],
-    top_k: input.candidates,
+    ...resultLimit(input.candidates, input.chunksPerDocument),
     include_attributes: [...TurbopufferSearchResultAttributes],
   })
 }
@@ -386,12 +414,14 @@ export const compileTurbopufferHybridQuery = (input: {
   readonly semanticCandidates: SearchResultCount
   readonly textCandidates: SearchResultCount
   readonly consistency?: TurbopufferQueryConsistency | undefined
+  readonly chunksPerDocument?: number | undefined
 }): CompiledTurbopufferHybridQuery => {
   const semantic = compileTurbopufferSemanticQuery({
     scope: input.scope,
     partition: input.partition,
     queryVector: input.queryVector,
     candidates: input.semanticCandidates,
+    chunksPerDocument: input.chunksPerDocument,
   })
 
   if (semantic._tag === "NoDocuments") return semantic
@@ -402,6 +432,7 @@ export const compileTurbopufferHybridQuery = (input: {
     query: input.query,
     policy: input.policy,
     candidates: input.textCandidates,
+    chunksPerDocument: input.chunksPerDocument,
   })
 
   if (text._tag === "NoDocuments") return text

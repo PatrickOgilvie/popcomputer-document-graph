@@ -1,8 +1,5 @@
-import type {
-  NamespaceMultiQueryParams,
-  NamespaceQueryParams,
-} from "@turbopuffer/turbopuffer"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Result, Schema } from "effect"
+import { makeRequestCoalescer } from "../postgres/coalesce.js"
 import {
   ProjectionPublicationCoordinator,
   ProjectionPublicationCoordinatorFailed,
@@ -48,9 +45,9 @@ import {
   compileTurbopufferSemanticQuery,
   compileTurbopufferTextQuery,
   TurbopufferQueryConsistencySchema,
-  type CompiledTurbopufferHybridQuery,
   type CompiledTurbopufferQuery,
   type TurbopufferQueryConsistency,
+  type TurbopufferSerializedQuery,
 } from "./query-compiler.js"
 import {
   decodeTurbopufferSearchResultRow,
@@ -89,9 +86,37 @@ const parseQueryConsistency = (
 export interface TurbopufferProjectionSearchConfig {
   /** Canonical workspace, vector-space, and schema partition. */
   readonly partition: TurbopufferWorkspacePartition
-  /** Defaults to strong reads for search and same-snapshot multi-query. */
+  /**
+   * Defaults to strong reads for search and same-snapshot multi-query.
+   * Strong reads add an object-storage round trip to see the latest writes.
+   */
   readonly consistency?: TurbopufferQueryConsistency | undefined
+  /**
+   * How candidates are confirmed current. `"journal"` (default) checks every
+   * result against the publication coordinator. `"provider"` trusts live
+   * rows: each publication writes a document's marker, live slots and
+   * tombstones in one fenced request, so live rows are always one complete
+   * revision. It keeps the coordinator's database off the search path.
+   */
+  readonly candidateVerification?: "journal" | "provider" | undefined
+  /** Most chunks one document contributes to a channel's candidates. */
+  readonly chunksPerDocument?: number | undefined
+  /**
+   * Merge searches that arrive together into shared multi-queries of up to
+   * 16 subqueries, one HTTP request each. Build the Layer per request where
+   * the runtime scopes I/O to a request, as Cloudflare Workers does.
+   */
+  readonly coalesceSearches?: TurbopufferSearchCoalescing | undefined
 }
+
+/** How long searches wait to share a request, and how many may share one. */
+export interface TurbopufferSearchCoalescing {
+  /** Defaults to 2 ms. */
+  readonly windowMilliseconds?: number | undefined
+}
+
+/** Turbopuffer's limit on subqueries in one multi-query request. */
+const MaximumSubqueries = 16
 
 /** All retrieval capabilities implemented over one Turbopuffer namespace. */
 export interface TurbopufferProjectionSearchStores
@@ -118,37 +143,117 @@ const decodeQueryRows = (
     Effect.map((decoded) => decoded.rows),
   )
 
-const decodeMultiQueryRows = (
+const decodeMultiQueryResults = (
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- This provider response boundary immediately decodes the multi-query envelope with MultiQueryResponseSchema.
   response: unknown,
-): Effect.Effect<
-  readonly [ReadonlyArray<unknown>, ReadonlyArray<unknown>],
-  InvalidTurbopufferResponse
-> =>
+  expected: number,
+): Effect.Effect<ReadonlyArray<ReadonlyArray<unknown>>, InvalidTurbopufferResponse> =>
   Schema.decodeUnknownEffect(MultiQueryResponseSchema)(response).pipe(
     Effect.mapError((cause) => invalidResponse("multi_query", cause)),
-    Effect.flatMap((decoded) => {
-      const [semantic, text, ...unexpected] = decoded.results
-
-      if (
-        semantic === undefined ||
-        text === undefined ||
-        unexpected.length > 0
-      ) {
-        return Effect.fail(
-          invalidResponse(
+    Effect.flatMap((decoded) =>
+      decoded.results.length === expected
+        ? Effect.succeed(decoded.results.map((result) => result.rows))
+        : Effect.fail(invalidResponse(
             "multi_query",
-            "Expected exactly two independently ranked query results",
-          ),
-        )
-      }
-
-      return Effect.succeed([
-        semantic.rows,
-        text.rows,
-      ] as const)
-    }),
+            "Expected one result for every subquery",
+          ))),
   )
+
+/** Rows for each subquery, in request order. */
+type QueryExecutor = (
+  queries: readonly [TurbopufferSerializedQuery, ...ReadonlyArray<TurbopufferSerializedQuery>],
+) => Effect.Effect<
+  ReadonlyArray<ReadonlyArray<unknown>>,
+  TurbopufferTransportFailed | InvalidTurbopufferResponse
+>
+
+const directExecutor = (
+  client: TurbopufferClientService,
+  consistency: TurbopufferQueryConsistency,
+): QueryExecutor => (queries) => {
+  const [only, ...rest] = queries
+
+  return rest.length === 0
+    ? client.query({ ...only, consistency: { level: consistency } }).pipe(
+        Effect.flatMap(decodeQueryRows),
+        Effect.map((rows) => [rows]),
+      )
+    : client.multiQuery({ queries: [...queries], consistency: { level: consistency } }).pipe(
+        Effect.flatMap((response) => decodeMultiQueryResults(response, queries.length)),
+      )
+}
+
+/**
+ * Pack the subqueries of searches that arrive together into multi-queries of
+ * at most 16, run those requests concurrently, and hand each search its own
+ * rows. A failed request fails only the searches packed into it.
+ */
+const coalescedExecutor = (
+  client: TurbopufferClientService,
+  consistency: TurbopufferQueryConsistency,
+  windowMilliseconds: number,
+): QueryExecutor => {
+  type Outcome = Result.Result<
+    ReadonlyArray<ReadonlyArray<unknown>>,
+    TurbopufferTransportFailed | InvalidTurbopufferResponse
+  >
+
+  const coalescer = makeRequestCoalescer<ReadonlyArray<TurbopufferSerializedQuery>, Outcome>({
+    windowMilliseconds,
+    maximumBatch: MaximumSubqueries,
+    run: async (_key, searches) => {
+      const requests: Array<Array<number>> = []
+      let subqueries = MaximumSubqueries
+
+      searches.forEach((queries, index) => {
+        const current = requests[requests.length - 1]
+
+        if (current === undefined || subqueries + queries.length > MaximumSubqueries) {
+          requests.push([index])
+          subqueries = queries.length
+        } else {
+          current.push(index)
+          subqueries += queries.length
+        }
+      })
+
+      const outcomes = new Array<Outcome>(searches.length)
+
+      await Effect.runPromise(Effect.forEach(requests, (members) => {
+        const queries = members.flatMap((index) => searches[index] ?? [])
+
+        return client.multiQuery({ queries, consistency: { level: consistency } }).pipe(
+          Effect.flatMap((response) => decodeMultiQueryResults(response, queries.length)),
+          Effect.result,
+          Effect.map((result) => {
+            let offset = 0
+
+            for (const index of members) {
+              const count = searches[index]?.length ?? 0
+
+              outcomes[index] = Result.map(result, (rows) => rows.slice(offset, offset + count))
+              offset += count
+            }
+          }),
+        )
+      }, { concurrency: "unbounded", discard: true }))
+
+      return outcomes
+    },
+  })
+
+  return (queries) => Effect.tryPromise({
+    try: () => coalescer.submit("search", queries),
+    catch: (cause) => new TurbopufferTransportFailed({
+      operation: "multi_query",
+      reason: "unavailable",
+      requestOutcome: "unknown",
+      cause,
+    }),
+  }).pipe(Effect.flatMap((outcome) => Result.isSuccess(outcome)
+    ? Effect.succeed(outcome.success)
+    : Effect.fail(outcome.failure)))
+}
 
 interface DecodedCandidate {
   readonly candidate: CandidateFields
@@ -382,6 +487,7 @@ const compileSemantic = (
         partition: config.partition,
         queryVector: request.vector,
         candidates: request.candidates,
+        chunksPerDocument: config.chunksPerDocument,
       })
 
       if (
@@ -415,21 +521,10 @@ const compileText = (
         query: request.query,
         policy: request.policy,
         candidates: request.candidates,
+        chunksPerDocument: config.chunksPerDocument,
       }),
     catch: textFailure,
   })
-
-const semanticQueryRequest = (
-  query: Extract<CompiledTurbopufferQuery, { readonly _tag: "Query" }>,
-  consistency: TurbopufferQueryConsistency,
-): NamespaceQueryParams => ({
-  ...query.query,
-  consistency: { level: consistency },
-})
-
-const hybridQueryRequest = (
-  query: Extract<CompiledTurbopufferHybridQuery, { readonly _tag: "MultiQuery" }>,
-): NamespaceMultiQueryParams => query.request
 
 /**
  * Build semantic, lexical, and same-snapshot hybrid stores over one client and
@@ -463,6 +558,73 @@ export const makeTurbopufferProjectionSearchStores = (input: {
     input.config.consistency ?? "strong",
   )
 
+  const verification = input.config.candidateVerification ?? "journal"
+  const chunksPerDocument = input.config.chunksPerDocument
+
+  if (
+    chunksPerDocument !== undefined &&
+    (!Number.isSafeInteger(chunksPerDocument) || chunksPerDocument < 1)
+  ) {
+    throw new InvalidTurbopufferConfiguration({
+      field: "chunks_per_document",
+      reason: "invalid_value",
+    })
+  }
+
+  const coalescing = input.config.coalesceSearches
+  const windowMilliseconds = coalescing?.windowMilliseconds ?? 2
+
+  if (!Number.isSafeInteger(windowMilliseconds) || windowMilliseconds < 0 || windowMilliseconds > 100) {
+    throw new InvalidTurbopufferConfiguration({
+      field: "coalesce_searches",
+      reason: "invalid_value",
+    })
+  }
+
+  const execute = coalescing === undefined
+    ? directExecutor(input.client, consistency)
+    : coalescedExecutor(input.client, consistency, windowMilliseconds)
+
+  const operation = coalescing === undefined ? "query" as const : "multi_query" as const
+
+  const verified = (
+    candidates: ReadonlyArray<DecodedCandidate>,
+  ): Effect.Effect<
+    ReadonlyArray<CandidateFields>,
+    InvalidTurbopufferResponse | ProjectionPublicationCoordinatorFailed
+  > =>
+    verification === "provider"
+      ? Effect.succeed(normalizeCandidates(candidates))
+      : verifyCommittedCandidates({
+          operation,
+          candidates,
+          coordinator: input.coordinator,
+        }).pipe(Effect.map(() => normalizeCandidates(candidates)))
+
+  const singleChannel = <E>(
+    compiled: CompiledTurbopufferQuery,
+    score: (providerScore: number) => number,
+    failure: (
+      error:
+        | TurbopufferTransportFailed
+        | InvalidTurbopufferResponse
+        | ProjectionPublicationCoordinatorFailed,
+    ) => E,
+  ): Effect.Effect<ReadonlyArray<CandidateFields>, E> => {
+    if (compiled._tag === "NoDocuments") return Effect.succeed([])
+
+    return execute([compiled.query]).pipe(
+      Effect.flatMap(([rows]) => decodeCandidates({
+        operation,
+        rows: rows ?? [],
+        partition,
+        score,
+      })),
+      Effect.flatMap(verified),
+      Effect.mapError(failure),
+    )
+  }
+
   const searchCandidates = (
     request: SemanticCandidateRequest,
   ): Effect.Effect<
@@ -470,34 +632,8 @@ export const makeTurbopufferProjectionSearchStores = (input: {
     ProjectionSearchStoreFailed
   > =>
     compileSemantic(input.config, request).pipe(
-      Effect.flatMap((compiled) => {
-        if (compiled._tag === "NoDocuments") return Effect.succeed([])
-
-        return input.client.query(
-          semanticQueryRequest(compiled, consistency),
-        ).pipe(
-          Effect.mapError(semanticFailure),
-          Effect.flatMap(decodeQueryRows),
-          Effect.mapError(semanticFailure),
-          Effect.flatMap((rows) =>
-            decodeCandidates({
-              operation: "query",
-              rows,
-              partition,
-              score: scoreTurbopufferCosineDistance,
-            })),
-          Effect.mapError(semanticFailure),
-          Effect.flatMap((candidates) =>
-            verifyCommittedCandidates({
-              operation: "query",
-              candidates,
-              coordinator: input.coordinator,
-            }).pipe(
-              Effect.mapError(semanticFailure),
-              Effect.map(() => normalizeCandidates(candidates)),
-            )),
-        )
-      }),
+      Effect.flatMap((compiled) =>
+        singleChannel(compiled, scoreTurbopufferCosineDistance, semanticFailure)),
     )
 
   const searchTextCandidates = (
@@ -507,34 +643,8 @@ export const makeTurbopufferProjectionSearchStores = (input: {
     ProjectionTextSearchStoreFailed
   > =>
     compileText(input.config, request).pipe(
-      Effect.flatMap((compiled) => {
-        if (compiled._tag === "NoDocuments") return Effect.succeed([])
-
-        return input.client.query(
-          semanticQueryRequest(compiled, consistency),
-        ).pipe(
-          Effect.mapError(textFailure),
-          Effect.flatMap(decodeQueryRows),
-          Effect.mapError(textFailure),
-          Effect.flatMap((rows) =>
-            decodeCandidates({
-              operation: "query",
-              rows,
-              partition,
-              score: scoreTurbopufferBm25,
-            })),
-          Effect.mapError(textFailure),
-          Effect.flatMap((candidates) =>
-            verifyCommittedCandidates({
-              operation: "query",
-              candidates,
-              coordinator: input.coordinator,
-            }).pipe(
-              Effect.mapError(textFailure),
-              Effect.map(() => normalizeCandidates(candidates)),
-            )),
-        )
-      }),
+      Effect.flatMap((compiled) =>
+        singleChannel(compiled, scoreTurbopufferBm25, textFailure)),
     )
 
   const searchHybridCandidates = (
@@ -554,6 +664,7 @@ export const makeTurbopufferProjectionSearchStores = (input: {
           semanticCandidates: request.semanticCandidates,
           textCandidates: request.textCandidates,
           consistency,
+          chunksPerDocument,
         })
 
         if (
@@ -579,40 +690,45 @@ export const makeTurbopufferProjectionSearchStores = (input: {
           return Effect.succeed({ semantic: [], text: [] })
         }
 
-        return input.client.multiQuery(hybridQueryRequest(compiled)).pipe(
-          Effect.mapError(semanticFailure),
-          Effect.flatMap(decodeMultiQueryRows),
+        const [semanticQuery, textQuery] = compiled.request.queries
+
+        return execute([semanticQuery, textQuery]).pipe(
           Effect.mapError(semanticFailure),
           Effect.flatMap(([semanticRows, textRows]) =>
             Effect.all({
               semantic: decodeCandidates({
                 operation: "multi_query",
-                rows: semanticRows,
+                rows: semanticRows ?? [],
                 partition,
                 score: scoreTurbopufferCosineDistance,
               }).pipe(Effect.mapError(semanticFailure)),
               text: decodeCandidates({
                 operation: "multi_query",
-                rows: textRows,
+                rows: textRows ?? [],
                 partition,
                 score: scoreTurbopufferBm25,
               }).pipe(Effect.mapError(textFailure)),
             })),
           Effect.flatMap((candidates) =>
-            verifyCommittedCandidates({
-              operation: "multi_query",
-              candidates: [
-                ...candidates.semantic,
-                ...candidates.text,
-              ],
-              coordinator: input.coordinator,
-            }).pipe(
-              Effect.mapError(semanticFailure),
-              Effect.map(() => ({
-                semantic: normalizeCandidates(candidates.semantic),
-                text: normalizeCandidates(candidates.text),
-              })),
-            )),
+            verification === "provider"
+              ? Effect.succeed({
+                  semantic: normalizeCandidates(candidates.semantic),
+                  text: normalizeCandidates(candidates.text),
+                })
+              : verifyCommittedCandidates({
+                  operation: "multi_query",
+                  candidates: [
+                    ...candidates.semantic,
+                    ...candidates.text,
+                  ],
+                  coordinator: input.coordinator,
+                }).pipe(
+                  Effect.mapError(semanticFailure),
+                  Effect.map(() => ({
+                    semantic: normalizeCandidates(candidates.semantic),
+                    text: normalizeCandidates(candidates.text),
+                  })),
+                )),
         )
       }),
     )

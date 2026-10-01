@@ -39,6 +39,13 @@ export interface TurbopufferClientConfig {
    * bulk writes; on Workers the SDK compresses in JavaScript. Defaults off.
    */
   readonly compression?: boolean | undefined
+  /**
+   * Ask for gzipped responses; defaults on. Search responses carry chunk
+   * text and shrink about fourfold, and every runtime decompresses natively.
+   * The SDK otherwise requests uncompressed responses unless `compression`
+   * also gzips requests.
+   */
+  readonly compressResponses?: boolean | undefined
 }
 
 /** Narrow provider operations used by publication, search, and administration. */
@@ -64,6 +71,15 @@ export interface TurbopufferClientService {
     unknown,
     TurbopufferTransportFailed
   >
+}
+
+/** Official client operations kept outside the narrow service seam. */
+export interface OfficialTurbopufferClient extends TurbopufferClientService {
+  /**
+   * Ask Turbopuffer to load the namespace into cache, for example when a user
+   * opens search. Free when it is already warm.
+   */
+  readonly warmCache: () => Effect.Effect<void, TurbopufferTransportFailed>
 }
 
 /** Effect service tag for the narrow Turbopuffer transport boundary. */
@@ -355,7 +371,7 @@ const unwrapCanonicalApiKey = (
 /** Build the official SDK transport with SDK retries and logging disabled. */
 export const makeOfficialTurbopufferClient = (
   config: TurbopufferClientConfig,
-): TurbopufferClientService => {
+): OfficialTurbopufferClient => {
   const partition = validateTurbopufferWorkspacePartition(config.partition)
   const namespace = partition.namespace
   const retries = checkedInteger(config.retries ?? 2, "retries", 0)
@@ -373,7 +389,9 @@ export const makeOfficialTurbopufferClient = (
     defaultNamespace: namespace,
     // The SDK merges TURBOPUFFER_CUSTOM_HEADERS after its auth headers.
     // Reassert the canonical key here so ambient headers cannot replace it.
-    defaultHeaders: { authorization: `Bearer ${apiKey}` },
+    defaultHeaders: config.compressResponses === false
+      ? { authorization: `Bearer ${apiKey}` }
+      : { authorization: `Bearer ${apiKey}`, "accept-encoding": "gzip" },
     maxRetries: 0,
     timeout,
     logLevel: "off",
@@ -437,6 +455,10 @@ export const makeOfficialTurbopufferClient = (
       "destroy_namespace",
       (signal) => remote.deleteAll({}, { signal }),
     ),
+    warmCache: () => request(
+      "hint_cache_warm",
+      (signal) => remote.hintCacheWarm({}, { signal }),
+    ).pipe(Effect.asVoid),
   }
 }
 

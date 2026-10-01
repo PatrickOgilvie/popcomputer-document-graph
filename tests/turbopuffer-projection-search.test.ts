@@ -819,3 +819,129 @@ describe("Turbopuffer projection search", () => {
     })
   })
 })
+
+describe("Turbopuffer search coalescing and verification", () => {
+  const scope = makeGraphSearchScope(reference.graph, {}, registered)
+
+  const semanticRequest = {
+    vector: [0.25, 0.75],
+    embeddingProfile: profile,
+    scope,
+    candidates: semantic({ candidates: 5, results: 5 }).candidates,
+  }
+
+  const hybridRequest = {
+    query: "graph search",
+    vector: [0.25, 0.75],
+    embeddingProfile: profile,
+    textPolicy,
+    scope,
+    semanticCandidates: semanticRequest.candidates,
+    textCandidates: text({ policy: textPolicy, candidates: 4, results: 4 }).candidates,
+  }
+
+  test("packs concurrent searches into multi-queries of at most 16 subqueries", async () => {
+    const requests: Array<NamespaceMultiQueryParams> = []
+
+    const stores = makeTurbopufferProjectionSearchStores({
+      config: {
+        partition,
+        candidateVerification: "provider",
+        coalesceSearches: { windowMilliseconds: 5 },
+      },
+      coordinator: makeCoordinator({ loadRevisions: unused }),
+      client: makeClient({
+        multiQuery: (request) => {
+          requests.push(request)
+
+          return Effect.succeed({
+            results: request.queries.map((_, index) => ({ rows: [resultRow(index / 100)] })),
+          })
+        },
+      }),
+    })
+
+    // Seven hybrid searches (14 subqueries) and three semantic ones (3) need two requests.
+    const results = await Effect.runPromise(Effect.all([
+      ...Array.from({ length: 7 }, () => stores.searchHybridCandidates(hybridRequest)),
+      ...Array.from({ length: 3 }, () => stores.searchCandidates(semanticRequest)),
+    ], { concurrency: "unbounded" }))
+
+    expect(requests.map((request) => request.queries.length).sort((a, b) => b - a)).toEqual([16, 1])
+    expect(results).toHaveLength(10)
+    expect(results.slice(0, 7).every((result) =>
+      "semantic" in result && result.semantic.length === 1 && result.text.length === 1)).toBe(true)
+  })
+
+  test("fails only the searches packed into a failed request", async () => {
+    let call = 0
+
+    const stores = makeTurbopufferProjectionSearchStores({
+      config: { partition, candidateVerification: "provider", coalesceSearches: {} },
+      coordinator: makeCoordinator({ loadRevisions: unused }),
+      client: makeClient({
+        multiQuery: (request) => {
+          call += 1
+
+          return call === 1
+            ? Effect.succeed({ results: request.queries.map(() => ({ rows: [resultRow(0.1)] })) })
+            : Effect.die(new Error("Only one request was expected"))
+        },
+      }),
+    })
+
+    const [first, second] = await Effect.runPromise(Effect.all([
+      stores.searchCandidates(semanticRequest),
+      stores.searchCandidates(semanticRequest),
+    ], { concurrency: "unbounded" }))
+
+    expect(call).toBe(1)
+    expect(first).toHaveLength(1)
+    expect(second).toHaveLength(1)
+  })
+
+  test("trusts live provider rows without reading the publication journal", async () => {
+    let journalReads = 0
+
+    const stores = makeTurbopufferProjectionSearchStores({
+      config: { partition, candidateVerification: "provider" },
+      coordinator: makeCoordinator({
+        loadRevisions: (keys) => {
+          journalReads += 1
+
+          return Effect.succeed(keys.map((key) => ({ key, revision: Option.none() })))
+        },
+      }),
+      client: makeClient({ query: () => Effect.succeed({ rows: [resultRow(0.2)] }) }),
+    })
+
+    const candidates = await Effect.runPromise(stores.searchCandidates(semanticRequest))
+
+    expect(journalReads).toBe(0)
+    expect(candidates).toHaveLength(1)
+  })
+
+  test("caps each document's chunks in both channels", async () => {
+    const requests: Array<NamespaceMultiQueryParams> = []
+
+    const stores = makeTurbopufferProjectionSearchStores({
+      config: { partition, candidateVerification: "provider", chunksPerDocument: 2 },
+      coordinator: makeCoordinator(),
+      client: makeClient({
+        multiQuery: (request) => {
+          requests.push(request)
+
+          return Effect.succeed({ results: [{ rows: [] }, { rows: [] }] })
+        },
+      }),
+    })
+
+    await Effect.runPromise(stores.searchHybridCandidates(hybridRequest))
+
+    expect(requests[0]?.queries.map((query) => query.limit)).toEqual([
+      { total: 5, per: { attributes: ["document_key"], limit: 2 } },
+      { total: 4, per: { attributes: ["document_key"], limit: 2 } },
+    ])
+    expect(requests[0]?.queries.every((query) => query.top_k === undefined)).toBe(true)
+  })
+})

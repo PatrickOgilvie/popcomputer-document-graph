@@ -34,6 +34,7 @@ import {
   compileTurbopufferSemanticQuery,
   parseTurbopufferTextMatch,
 } from "../src/storage/turbopuffer/query-compiler.js"
+import { encodeTurbopufferVector } from "../src/storage/turbopuffer/vector-encoding.js"
 
 const profile = defineEmbeddingProfile({
   id: "test/embedding",
@@ -173,10 +174,10 @@ describe("Turbopuffer query compiler", () => {
     expect(compiled.request.queries).toHaveLength(2)
     const [semantic, text] = compiled.request.queries
     expect(semantic.distance_metric).toBe("cosine_distance")
-    expect(semantic.rank_by).toEqual([
+    expect<unknown>(semantic.rank_by).toEqual([
       "vector",
       "ANN",
-      [0.2, 0.3, 0.4],
+      encodeTurbopufferVector([0.2, 0.3, 0.4]),
     ])
     expect(text.rank_by).toEqual([
       "Sum",
