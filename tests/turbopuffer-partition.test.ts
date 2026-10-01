@@ -129,9 +129,27 @@ describe("Turbopuffer workspace partition", () => {
       schemaGeneration: 1,
     })
 
+    const halfPrecision = makeTurbopufferWorkspacePartition({
+      workspace: "workspace-1",
+      deploymentId,
+      endpoint,
+      embeddingProfile: profile,
+      schemaGeneration: 1,
+      vectorElementType: "f16",
+    })
+
     expect(otherDeployment.identity).not.toBe(regional.identity)
     expect(otherRegion.identity).not.toBe(regional.identity)
     expect(custom.identity).not.toBe(regional.identity)
+    expect(regional.vectorElementType).toBe("f32")
+    expect(halfPrecision.identity).not.toBe(regional.identity)
+    expect(
+      compileTurbopufferSchemaManifest(profile.dimensions, halfPrecision.vectorElementType)
+        .attributes["vector"],
+    ).toEqual({
+      type: `[${profile.dimensions}]f16`,
+      ann: { distance_metric: "cosine_distance" },
+    })
     expect(custom.endpoint._tag).toBe("Custom")
 
     if (custom.endpoint._tag !== "Custom") {

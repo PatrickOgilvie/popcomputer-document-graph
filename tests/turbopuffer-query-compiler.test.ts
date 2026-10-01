@@ -32,6 +32,7 @@ import { makeTurbopufferWorkspacePartition } from "../src/storage/turbopuffer/pa
 import {
   compileTurbopufferHybridQuery,
   compileTurbopufferSemanticQuery,
+  parseTurbopufferTextMatch,
 } from "../src/storage/turbopuffer/query-compiler.js"
 
 const profile = defineEmbeddingProfile({
@@ -204,6 +205,74 @@ describe("Turbopuffer query compiler", () => {
     )
     expect(JSON.stringify(semantic.filters)).toContain("ContainsAny")
     expect(JSON.stringify(semantic.filters)).toContain('"Not"')
+  })
+
+  test("parses web-search phrases, alternatives, and exclusions", () => {
+    expect(parseTurbopufferTextMatch("\"food photography\" OR \"recipe video\"")).toEqual({
+      terms: "food photography recipe video",
+      phraseAlternatives: [["food photography"], ["recipe video"]],
+    })
+    expect(parseTurbopufferTextMatch("\"food photography\" \"brand film\" or \"stills\"")).toEqual({
+      terms: "food photography brand film stills",
+      phraseAlternatives: [["food photography", "brand film"], ["stills"]],
+    })
+    // An unquoted alternative matches on its words, so no phrase is required.
+    expect(parseTurbopufferTextMatch("\"food photography\" OR nutrition")).toEqual({
+      terms: "food photography nutrition",
+      phraseAlternatives: [],
+    })
+    // Words and phrases in one alternative are all required, so its phrase is too.
+    expect(parseTurbopufferTextMatch("healthy -fried \"snack\" -\"fast food\" OR")).toEqual({
+      terms: "healthy snack",
+      phraseAlternatives: [["snack"]],
+    })
+    expect(parseTurbopufferTextMatch("\"unterminated phrase")).toEqual({
+      terms: "unterminated phrase",
+      phraseAlternatives: [["unterminated phrase"]],
+    })
+  })
+
+  test("requires one quoted alternative in the text channel only", () => {
+    const scope = makeGraphSearchScope("contracts", {})
+
+    const policy = parseTextSearchPolicy({
+      language: "english",
+      weights: { context: 2, label: 3, content: 1 },
+    })
+
+    if (policy === "disabled") throw new Error("Expected enabled text fixture")
+
+    const compiled = compileTurbopufferHybridQuery({
+      scope,
+      partition,
+      query: "\"food photography\" OR \"recipe video\"",
+      queryVector: [0.2, 0.3, 0.4],
+      policy,
+      semanticCandidates: candidates,
+      textCandidates: candidates,
+    })
+
+    if (compiled._tag !== "MultiQuery") throw new Error("Expected a multi-query")
+    const [semantic, text] = compiled.request.queries
+    const phraseIn = (phrase: string) => ["And", [["Or", [
+      ["fts_en_context", "ContainsTokenSequence", phrase],
+      ["fts_en_label", "ContainsTokenSequence", phrase],
+      ["fts_en_content", "ContainsTokenSequence", phrase],
+    ]]]]
+
+    expect<unknown>(text.filters).toEqual(["And", [
+      semantic.filters,
+      ["Or", [phraseIn("food photography"), phraseIn("recipe video")]],
+    ]])
+    expect(text.rank_by).toEqual([
+      "Sum",
+      [
+        ["Product", 2, ["fts_en_context", "BM25", "food photography recipe video"]],
+        ["Product", 3, ["fts_en_label", "BM25", "food photography recipe video"]],
+        ["Product", 1, ["fts_en_content", "BM25", "food photography recipe video"]],
+      ],
+    ])
+    expect(JSON.stringify(semantic.filters)).not.toContain("ContainsTokenSequence")
   })
 
   test("short-circuits an empty graph target before constructing ANN work", () => {

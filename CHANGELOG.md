@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.8.0 - 2026-10-01
+
+Turbopuffer retrieval with PostgreSQL topology and journal.
+
+### Added
+
+- `postgresProjectionPublicationCoordinator` keeps the Turbopuffer publication
+  journal in PostgreSQL (migration 0006). Each transition runs in one
+  transaction with the head row locked, and the D1 coordinator's behaviour is
+  held by a shared conformance suite that runs against both.
+- `makeTurbopufferPostgresDocumentGraph` composes PostgreSQL topology and
+  journal with Turbopuffer index, semantic, text and hybrid search.
+- `copyPostgresProjectionIndex` and `readPostgresProjectionIndexPage` copy a
+  graph's PostgreSQL projection index into any `ProjectionIndexStore`, reusing
+  every stored vector. Unchanged revisions are skipped, so a copy resumes.
+- `vectorElementType: "f16"` on Turbopuffer partitions stores half-precision
+  vectors.
+- Turbopuffer text search reads web-search syntax: BM25 ranks every positive
+  word, and a query of quoted phrases requires one alternative's phrases, as
+  PostgreSQL's `websearch_to_tsquery` does.
+
+### Changed
+
+- **Breaking:** Turbopuffer namespace identities include the vector element
+  type, so every partition maps to a new namespace and journal generation.
+- English Turbopuffer full-text fields are stemmed and drop stopwords, matching
+  PostgreSQL's `english` configuration. Existing namespaces rebuild those
+  indexes in place.
+
 ## 0.7.0 - 2026-09-30
 
 PostgreSQL search coalescing, plus everything in 0.6.0, which was never

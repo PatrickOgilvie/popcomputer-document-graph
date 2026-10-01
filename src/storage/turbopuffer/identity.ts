@@ -101,11 +101,12 @@ export const makeTurbopufferNamespaceIdentity = (input: {
     readonly dimensions: number
   }
   readonly schemaGeneration: number
+  readonly vectorElementType: string
 }): TurbopufferNamespaceIdentity =>
   Schema.decodeSync(TurbopufferNamespaceIdentitySchema)(
     hashTurbopufferIdentity([
       "honertia.turbopuffer-namespace",
-      2,
+      3,
       input.deploymentId,
       input.endpoint._tag,
       input.endpoint._tag === "Region"
@@ -116,6 +117,7 @@ export const makeTurbopufferNamespaceIdentity = (input: {
       input.embeddingProfile.version,
       input.embeddingProfile.dimensions,
       input.schemaGeneration,
+      input.vectorElementType,
     ]),
   )
 

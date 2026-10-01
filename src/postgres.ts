@@ -22,3 +22,18 @@ export type {
   PostgresVectorIndexSqlOptions,
   VectorIndexRepresentation,
 } from "./storage/postgres/vector-index.js"
+
+export {
+  postgresProjectionPublicationCoordinator,
+  type PostgresProjectionPublicationConfig,
+} from "./storage/postgres/projection-publication.js"
+
+export {
+  copyPostgresProjectionIndex,
+  PostgresProjectionIndexReadFailed,
+  readPostgresProjectionIndexPage,
+  type PostgresProjectionIndexCursor,
+  type PostgresProjectionIndexPage,
+  type ProjectionIndexCopyProgress,
+  type StoredProjectedRevision,
+} from "./storage/postgres/projection-index-copy.js"

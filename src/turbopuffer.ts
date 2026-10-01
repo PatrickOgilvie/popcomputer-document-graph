@@ -8,6 +8,7 @@ import type {
 import {
   makeTurbopufferProjectionIndexStore,
   type TurbopufferProjectionIndexConfig,
+  type TurbopufferWriteCoalescing,
 } from "./storage/turbopuffer/projection-index.js"
 
 /** Provide the D1-coordinated Turbopuffer projection index capability. */
@@ -47,10 +48,12 @@ export {
   TurbopufferNamespaceSchema,
   TurbopufferSchemaGenerationSchema,
   TurbopufferVectorDimensionsSchema,
+  TurbopufferVectorElementTypeSchema,
   type TurbopufferNamespace,
   type TurbopufferSchemaGeneration,
   type TurbopufferSchemaManifest,
   type TurbopufferVectorDimensions,
+  type TurbopufferVectorElementType,
 } from "./storage/turbopuffer/config.js"
 
 export {
@@ -97,11 +100,22 @@ export {
 
 export {
   makeTurbopufferD1Workspace,
+  turbopufferProviderPartition,
+  turbopufferProviderStorage,
   type TurbopufferD1Workspace,
   type TurbopufferD1WorkspaceConfig,
   type TurbopufferD1WorkspaceProviderConfig,
   type TurbopufferD1WorkspaceServices,
+  type TurbopufferProviderServices,
 } from "./storage/turbopuffer/workspace.js"
+
+export {
+  makeTurbopufferPostgresDocumentGraph,
+  type TurbopufferPostgresDocumentGraph,
+  type TurbopufferPostgresDocumentGraphConfig,
+  type TurbopufferPostgresDocumentGraphServices,
+  type TurbopufferPostgresStorageConfig,
+} from "./storage/turbopuffer/postgres-document-graph.js"
 
 export {
   destroyTurbopufferNamespace,
@@ -134,11 +148,13 @@ export {
   compileTurbopufferHybridQuery,
   compileTurbopufferSemanticQuery,
   compileTurbopufferTextQuery,
+  parseTurbopufferTextMatch,
   TurbopufferQueryConsistencySchema,
   type CompiledTurbopufferHybridQuery,
   type CompiledTurbopufferQuery,
   type TurbopufferQueryConsistency,
   type TurbopufferQueryPartition,
+  type TurbopufferTextMatch,
 } from "./storage/turbopuffer/query-compiler.js"
 
 export {

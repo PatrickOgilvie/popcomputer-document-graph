@@ -4,6 +4,7 @@ import type {
   NamespaceWriteParams,
 } from "@turbopuffer/turbopuffer"
 import { Effect, Option, Result, Schema } from "effect"
+import { makeRequestCoalescer } from "../postgres/coalesce.js"
 import {
   ContentHashSchema,
   type ContentHash,
@@ -61,7 +62,7 @@ import {
   InvalidTurbopufferConfiguration,
   InvalidTurbopufferResponse,
   TurbopufferMutationTooLarge,
-  type TurbopufferTransportFailed,
+  TurbopufferTransportFailed,
 } from "./errors.js"
 import {
   hashTurbopufferIdentity,
@@ -96,7 +97,21 @@ const WriteResponseSchema = Schema.Struct({
     Schema.check(Schema.isInt()),
     Schema.check(Schema.isGreaterThanOrEqualTo(0)),
   ),
+  upserted_ids: Schema.optional(Schema.Array(Schema.String)),
 })
+
+/** Rows one publication's write applied, read from the provider response. */
+interface PublicationWrite {
+  readonly rowsAffected: number
+}
+
+/** Writes one publication's rows, alone or merged with concurrent ones. */
+type PublicationRowWriter = (
+  rows: ReadonlyArray<TurbopufferPublicationRow>,
+) => Effect.Effect<
+  PublicationWrite,
+  TurbopufferTransportFailed | InvalidTurbopufferResponse
+>
 
 const MarkerResultRowSchema = Schema.Struct({
   row_kind: Schema.Literal("marker"),
@@ -117,6 +132,22 @@ export interface TurbopufferProjectionIndexConfig {
   readonly maximumSlotsPerRevision?: number | undefined
   /** Maximum serialized atomic request bytes; defaults to 4 MiB. */
   readonly maximumPublicationBytes?: number | undefined
+  /**
+   * Merge publications that arrive together into one provider write.
+   * Turbopuffer applies conditional writes one at a time per namespace, so a
+   * bulk copy otherwise publishes about eight documents a second. Every row
+   * keeps its own generation fence, and each publication is confirmed from
+   * the IDs the write reports affected. Off by default.
+   */
+  readonly coalesceWrites?: TurbopufferWriteCoalescing | undefined
+}
+
+/** How long publications wait to share a write, and how many may share one. */
+export interface TurbopufferWriteCoalescing {
+  /** Defaults to 10 ms. */
+  readonly windowMilliseconds?: number | undefined
+  /** Defaults to 64 publications. */
+  readonly maximumPublications?: number | undefined
 }
 
 interface ResolvedProjectionIndexConfig {
@@ -125,6 +156,10 @@ interface ResolvedProjectionIndexConfig {
   readonly schemaGeneration: TurbopufferSchemaGeneration
   readonly maximumSlotsPerRevision: number
   readonly maximumPublicationBytes: number
+  readonly coalesceWrites: {
+    readonly windowMilliseconds: number
+    readonly maximumPublications: number
+  } | undefined
 }
 
 const resolveConfig = (
@@ -152,6 +187,20 @@ const resolveConfig = (
   }
 
   const partition = validateTurbopufferWorkspacePartition(config.partition)
+  const windowMilliseconds = config.coalesceWrites?.windowMilliseconds ?? 10
+  const maximumPublications = config.coalesceWrites?.maximumPublications ?? 64
+
+  if (
+    !Number.isSafeInteger(windowMilliseconds) || windowMilliseconds < 0 ||
+    windowMilliseconds > 1_000 ||
+    !Number.isSafeInteger(maximumPublications) || maximumPublications < 1 ||
+    maximumPublications > 1_024
+  ) {
+    throw new InvalidTurbopufferConfiguration({
+      field: "coalesce_writes",
+      reason: "invalid_value",
+    })
+  }
 
   return {
     partition,
@@ -159,6 +208,9 @@ const resolveConfig = (
     schemaGeneration: partition.schemaGeneration,
     maximumSlotsPerRevision,
     maximumPublicationBytes,
+    coalesceWrites: config.coalesceWrites === undefined
+      ? undefined
+      : { windowMilliseconds, maximumPublications },
   }
 }
 
@@ -477,13 +529,40 @@ const generationFence: Filter = ["Or", [
   ]],
 ]]
 
+const Base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+/**
+ * Encode a vector as base64 little-endian float32, the provider's compact wire
+ * form for every vector element type. It is about a quarter the size of JSON
+ * numbers, which dominate publication request bytes.
+ */
+export const encodeTurbopufferVector = (vector: ReadonlyArray<number>): string => {
+  const bytes = new Uint8Array(vector.length * 4)
+  const view = new DataView(bytes.buffer)
+  vector.forEach((component, index) => view.setFloat32(index * 4, component, true))
+  let encoded = ""
+
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0
+    const second = bytes[index + 1]
+    const third = bytes[index + 2]
+    const triple = (first << 16) | ((second ?? 0) << 8) | (third ?? 0)
+    encoded += Base64Alphabet.charAt((triple >> 18) & 63)
+    encoded += Base64Alphabet.charAt((triple >> 12) & 63)
+    encoded += second === undefined ? "=" : Base64Alphabet.charAt((triple >> 6) & 63)
+    encoded += third === undefined ? "=" : Base64Alphabet.charAt(triple & 63)
+  }
+
+  return encoded
+}
+
 const writeRequest = (
   rows: ReadonlyArray<TurbopufferPublicationRow>,
   config: ResolvedProjectionIndexConfig,
 ): NamespaceWriteParams => ({
   upsert_rows: rows.map((row) => ({
     ...row,
-    vector: [...row.vector],
+    vector: encodeTurbopufferVector(row.vector),
   })),
   upsert_condition: generationFence,
   return_affected_ids: true,
@@ -491,6 +570,7 @@ const writeRequest = (
   schema: {
     ...compileTurbopufferSchemaManifest(
       config.embeddingProfile.dimensions,
+      config.partition.vectorElementType,
     ).attributes,
   },
 })
@@ -788,6 +868,87 @@ const reconcilePublicationMarker = Effect.fn(
   )
 })
 
+const writeAlone = (
+  client: TurbopufferClientService,
+  config: ResolvedProjectionIndexConfig,
+): PublicationRowWriter => (rows) =>
+  client.write(writeRequest(rows, config)).pipe(
+    Effect.flatMap(decodeWriteResponse),
+    Effect.map((response) => ({ rowsAffected: response.rows_affected })),
+  )
+
+/**
+ * Share one conditional write among publications that arrive together. Rows
+ * keep their own generation fence, so merging never weakens a publication;
+ * each learns how many of its rows applied from the affected IDs. A failed
+ * write fails every publication in it, and each then reconciles its marker.
+ */
+const makePublicationRowWriter = (
+  client: TurbopufferClientService,
+  config: ResolvedProjectionIndexConfig,
+): PublicationRowWriter => {
+  const alone = writeAlone(client, config)
+  if (config.coalesceWrites === undefined) return alone
+
+  const coalescer = makeRequestCoalescer<
+    ReadonlyArray<TurbopufferPublicationRow>,
+    Result.Result<PublicationWrite, TurbopufferTransportFailed | InvalidTurbopufferResponse>
+  >({
+    windowMilliseconds: config.coalesceWrites.windowMilliseconds,
+    maximumBatch: config.coalesceWrites.maximumPublications,
+    run: async (_key, publications) => {
+      const merged = publications.flat()
+
+      const written = await Effect.runPromise(
+        client.write(writeRequest(merged, config)).pipe(
+          Effect.flatMap(decodeWriteResponse),
+          Effect.result,
+        ),
+      )
+
+      if (Result.isFailure(written)) {
+        return publications.map(() => Result.fail(written.failure))
+      }
+
+      const response = written.success
+
+      if (response.rows_affected === merged.length || response.rows_affected === 0) {
+        return publications.map((rows) => Result.succeed({
+          rowsAffected: response.rows_affected === 0 ? 0 : rows.length,
+        }))
+      }
+
+      if (response.upserted_ids === undefined) {
+        const missing = Result.fail(new InvalidTurbopufferResponse({
+          operation: "write",
+          reason: "partial_write",
+          cause: "A partial merged write did not report its affected IDs",
+        }))
+
+        return publications.map(() => missing)
+      }
+
+      const affected = new Set(response.upserted_ids)
+
+      return publications.map((rows) => Result.succeed({
+        rowsAffected: rows.filter((row) => affected.has(row.id)).length,
+      }))
+    },
+  })
+
+  return (rows) => Effect.tryPromise({
+    try: () => coalescer.submit("write", rows),
+    catch: (cause) => new TurbopufferTransportFailed({
+      operation: "write",
+      reason: "unavailable",
+      requestOutcome: "unknown",
+      cause,
+    }),
+  }).pipe(Effect.flatMap((result) => Result.isSuccess(result)
+    ? Effect.succeed(result.success)
+    : Effect.fail(result.failure)))
+}
+
 const publishLease = Effect.fn(
   "TurbopufferProjectionIndex.publishLease",
 )(function*(input: {
@@ -796,6 +957,7 @@ const publishLease = Effect.fn(
   readonly config: ResolvedProjectionIndexConfig
   readonly client: TurbopufferClientService
   readonly coordinator: ProjectionPublicationCoordinatorService
+  readonly writeRows: PublicationRowWriter
 }) {
   const operation = input.lease.intent._tag === "Replace"
     ? "replace_revision"
@@ -804,14 +966,16 @@ const publishLease = Effect.fn(
   const rows = buildPublicationRows(input)
   yield* assertPublicationFits(input.config, rows, operation)
 
-  const attempt = yield* input.client.write(
-    writeRequest(rows, input.config),
-  ).pipe(
-    Effect.map((response) => ({
-      _tag: "ProviderResponse" as const,
-      response,
+  const attempt = yield* input.writeRows(rows).pipe(
+    Effect.map((written) => ({
+      _tag: "Written" as const,
+      written,
     })),
     Effect.catch((error) => {
+      if (error._tag === "InvalidTurbopufferResponse") {
+        return Effect.fail(indexFailure(operation, "invalid_stored_state", error))
+      }
+
       if (
         error.requestOutcome === "definitely_not_applied"
       ) {
@@ -835,19 +999,16 @@ const publishLease = Effect.fn(
     return attempt.outcome
   }
 
-  const decoded = yield* decodeWriteResponse(attempt.response).pipe(
-    Effect.mapError((error) =>
-      indexFailure(operation, "invalid_stored_state", error)),
-  )
+  const affected = attempt.written.rowsAffected
 
-  if (decoded.rows_affected === rows.length) {
+  if (affected === rows.length) {
     return yield* finalizeVisiblePublication({
       lease: input.lease,
       coordinator: input.coordinator,
     })
   }
 
-  if (decoded.rows_affected === 0) {
+  if (affected === 0) {
     return yield* reconcilePublicationMarker({
       lease: input.lease,
       client: input.client,
@@ -863,7 +1024,7 @@ const publishLease = Effect.fn(
       reason: "partial_write",
       cause: {
         expected: rows.length,
-        actual: decoded.rows_affected,
+        actual: affected,
       },
     }),
   )
@@ -890,6 +1051,7 @@ export const makeTurbopufferProjectionIndexStore = (
 
   const coordinator = yield* ProjectionPublicationCoordinator
   const client = yield* TurbopufferClient
+  const writeRows = makePublicationRowWriter(client, config)
 
   if (
     !turbopufferWorkspacePartitionsEqual(config.partition, client.partition) ||
@@ -1114,6 +1276,7 @@ export const makeTurbopufferProjectionIndexStore = (
         config,
         client,
         coordinator,
+        writeRows,
       })
 
       if (outcome._tag !== "Replaced") {
@@ -1237,6 +1400,7 @@ export const makeTurbopufferProjectionIndexStore = (
         config,
         client,
         coordinator,
+        writeRows,
       })
 
       if (outcome._tag !== "Deleted") {

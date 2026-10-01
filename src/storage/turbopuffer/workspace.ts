@@ -30,9 +30,12 @@ import {
   type TurbopufferProjectionSearchConfig,
 } from "./projection-search.js"
 import type { TurbopufferQueryConsistency } from "./query-compiler.js"
+import type { TurbopufferVectorElementType } from "./config.js"
+import type { ProjectionPublicationCoordinator } from "../../indexing/projection-publication.js"
 import {
   makeTurbopufferProjectionIndexStore,
   type TurbopufferProjectionIndexConfig,
+  type TurbopufferWriteCoalescing,
 } from "./projection-index.js"
 
 /** Turbopuffer transport, partition, publication, and retrieval settings. */
@@ -45,16 +48,22 @@ export interface TurbopufferD1WorkspaceProviderConfig {
   readonly endpoint: TurbopufferEndpointInput
   /** Immutable provider schema generation. */
   readonly schemaGeneration: number
+  /** Dense vector element type, fixed per namespace; defaults to `f32`. */
+  readonly vectorElementType?: TurbopufferVectorElementType | undefined
   /** Per-request transport timeout; defaults to 60 seconds. */
   readonly timeoutMilliseconds?: number | undefined
   /** Effect-owned retries after the initial request; defaults to two. */
   readonly retries?: number | undefined
   /** Optional explicit fetch implementation for the current runtime. */
   readonly fetch?: TurbopufferClientConfig["fetch"]
+  /** Gzip request bodies, for bulk writes limited by upload bandwidth. */
+  readonly compression?: boolean | undefined
   /** Maximum stable slots for one logical revision; defaults to 10,000. */
   readonly maximumSlotsPerRevision?: number | undefined
   /** Maximum serialized atomic publication bytes; defaults to 4 MiB. */
   readonly maximumPublicationBytes?: number | undefined
+  /** Share one provider write among publications that arrive together. */
+  readonly coalesceWrites?: TurbopufferWriteCoalescing | undefined
   /** Retrieval consistency; defaults to strong. */
   readonly consistency?: TurbopufferQueryConsistency | undefined
   /** Diagnostic deadline for an unreconciled publication. */
@@ -151,6 +160,67 @@ const publicationCoordinator = (input: {
       })
 }
 
+/** Turbopuffer index and retrieval capabilities provided by one deployment. */
+export type TurbopufferProviderServices =
+  | ProjectionIndexStore
+  | ProjectionSearchStore
+  | ProjectionTextSearchStore
+  | ProjectionHybridSearchStore
+
+/** Derive the physical partition one provider configuration addresses. */
+export const turbopufferProviderPartition = (input: {
+  readonly workspace: string
+  readonly embeddingProfile: EmbeddingProviderService["profile"]
+  readonly turbopuffer: TurbopufferD1WorkspaceProviderConfig
+}): TurbopufferWorkspacePartition =>
+  makeTurbopufferWorkspacePartition({
+    workspace: input.workspace,
+    deploymentId: input.turbopuffer.deploymentId,
+    endpoint: input.turbopuffer.endpoint,
+    embeddingProfile: input.embeddingProfile,
+    schemaGeneration: input.turbopuffer.schemaGeneration,
+    vectorElementType: input.turbopuffer.vectorElementType,
+  })
+
+/**
+ * Turbopuffer index and retrieval over one partition, coordinated by the
+ * supplied publication journal.
+ */
+export const turbopufferProviderStorage = (input: {
+  readonly partition: TurbopufferWorkspacePartition
+  readonly turbopuffer: TurbopufferD1WorkspaceProviderConfig
+  readonly coordinator: Layer.Layer<ProjectionPublicationCoordinator>
+}): Layer.Layer<TurbopufferProviderServices, InvalidTurbopufferConfiguration> => {
+  const client = officialTurbopufferClient({
+    apiKey: input.turbopuffer.apiKey,
+    partition: input.partition,
+    timeoutMilliseconds: input.turbopuffer.timeoutMilliseconds,
+    retries: input.turbopuffer.retries,
+    fetch: input.turbopuffer.fetch,
+    compression: input.turbopuffer.compression,
+  })
+
+  const indexConfig: TurbopufferProjectionIndexConfig = {
+    partition: input.partition,
+    maximumSlotsPerRevision: input.turbopuffer.maximumSlotsPerRevision,
+    maximumPublicationBytes: input.turbopuffer.maximumPublicationBytes,
+    coalesceWrites: input.turbopuffer.coalesceWrites,
+  }
+
+  const searchConfig: TurbopufferProjectionSearchConfig = {
+    partition: input.partition,
+    consistency: input.turbopuffer.consistency,
+  }
+
+  return Layer.mergeAll(
+    Layer.effect(
+      ProjectionIndexStore,
+      makeTurbopufferProjectionIndexStore(indexConfig),
+    ),
+    turbopufferProjectionSearch(searchConfig),
+  ).pipe(Layer.provide(Layer.mergeAll(client, input.coordinator)))
+}
+
 /**
  * Compose one workspace-local D1 database and one Turbopuffer deployment.
  *
@@ -160,20 +230,10 @@ const publicationCoordinator = (input: {
 export const makeTurbopufferD1Workspace = (
   config: TurbopufferD1WorkspaceConfig,
 ): TurbopufferD1Workspace => {
-  const partition = makeTurbopufferWorkspacePartition({
+  const partition = turbopufferProviderPartition({
     workspace: config.workspace,
-    deploymentId: config.turbopuffer.deploymentId,
-    endpoint: config.turbopuffer.endpoint,
     embeddingProfile: config.embeddings.profile,
-    schemaGeneration: config.turbopuffer.schemaGeneration,
-  })
-
-  const client = officialTurbopufferClient({
-    apiKey: config.turbopuffer.apiKey,
-    partition,
-    timeoutMilliseconds: config.turbopuffer.timeoutMilliseconds,
-    retries: config.turbopuffer.retries,
-    fetch: config.turbopuffer.fetch,
+    turbopuffer: config.turbopuffer,
   })
 
   const coordinator = publicationCoordinator({
@@ -184,33 +244,16 @@ export const makeTurbopufferD1Workspace = (
     retainedPublicationHistory: config.turbopuffer.retainedPublicationHistory,
   })
 
-  const infrastructure = Layer.mergeAll(client, coordinator)
-
-  const indexConfig: TurbopufferProjectionIndexConfig = {
-    partition,
-    maximumSlotsPerRevision: config.turbopuffer.maximumSlotsPerRevision,
-    maximumPublicationBytes: config.turbopuffer.maximumPublicationBytes,
-  }
-
-  const searchConfig: TurbopufferProjectionSearchConfig = {
-    partition,
-    consistency: config.turbopuffer.consistency,
-  }
-
-  const providerStorage = Layer.mergeAll(
-    Layer.effect(
-      ProjectionIndexStore,
-      makeTurbopufferProjectionIndexStore(indexConfig),
-    ),
-    turbopufferProjectionSearch(searchConfig),
-  ).pipe(Layer.provide(infrastructure))
-
   return {
     partition,
     layer: Layer.mergeAll(
       Layer.succeed(EmbeddingProvider, config.embeddings),
       d1GraphTopology({ database: config.database }),
-      providerStorage,
+      turbopufferProviderStorage({
+        partition,
+        turbopuffer: config.turbopuffer,
+        coordinator,
+      }),
     ),
   }
 }

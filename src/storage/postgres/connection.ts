@@ -98,7 +98,7 @@ export interface PostgresSearchCoalescing {
 }
 
 interface PostgresDocumentGraphOptions {
-  readonly schema?: string
+  readonly schema?: string | undefined
   /** Auto uses installed pgvector for eligible vectors; float64 keeps array scoring. */
   readonly vectorSearch?: "auto" | "float64" | PostgresApproximateVectorSearch
   /**
@@ -119,7 +119,7 @@ interface PostgresDocumentGraphOptions {
    * The coalescer lives in this storage Layer, so build the Layer per request
    * where the runtime scopes I/O to a request, as Cloudflare Workers does.
    */
-  readonly coalesceSearches?: PostgresSearchCoalescing
+  readonly coalesceSearches?: PostgresSearchCoalescing | undefined
 }
 
 /**

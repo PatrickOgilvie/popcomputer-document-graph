@@ -26,6 +26,7 @@ import {
 } from "../../retrieval/graph-retrieval.js"
 import type { MetadataFilter } from "../../retrieval/metadata-filter.js"
 import { makeRequestCoalescer } from "./coalesce.js"
+import { DefaultPostgresSchema, PostgresSchemaNameSchema } from "./schema-name.js"
 import {
   countProjectedRevisionReplacement,
   embeddingProfilesEqual,
@@ -86,15 +87,7 @@ import {
   type ApproximateVectorIndex,
 } from "./vector-index.js"
 
-const DefaultSchema = "honertia_document_graph"
-
 const InsertBatchSize = 250
-
-const PostgresSchemaNameSchema = Schema.Trimmed.check(
-  Schema.isNonEmpty(),
-  Schema.isMaxLength(63),
-  Schema.isPattern(/^[a-z_][a-z0-9_]*$/i),
-)
 
 interface StoredRowParseIssue {
   readonly message: string
@@ -1936,7 +1929,7 @@ const resolvePostgresOptions = (config: PostgresDocumentGraphConfig): ResolvedPo
   const textTimeout = config.textSearchTimeoutMilliseconds
 
   return {
-    schema: Schema.decodeSync(PostgresSchemaNameSchema)(config.schema ?? DefaultSchema),
+    schema: Schema.decodeSync(PostgresSchemaNameSchema)(config.schema ?? DefaultPostgresSchema),
     coalescing: config.coalesceSearches === undefined ? undefined : {
       windowMilliseconds: Schema.decodeSync(CoalescingWindowSchema)(config.coalesceSearches.windowMilliseconds ?? 2),
       maximumBatch: Schema.decodeSync(CoalescingBatchSchema)(config.coalesceSearches.maximumBatch ?? 16),

@@ -1134,6 +1134,38 @@ for the complete protocol and failure table.
 The same composition is typechecked in
 [`examples/cloudflare-workspace.ts`](./examples/cloudflare-workspace.ts).
 
+### PostgreSQL + Turbopuffer composition
+
+When topology already lives in PostgreSQL, keep it there and move only chunks,
+vectors and full-text indexes to Turbopuffer. PostgreSQL also holds the
+publication journal (migration 0006), so one database answers topology and
+verifies every Turbopuffer candidate:
+
+```ts
+import { makeTurbopufferPostgresDocumentGraph } from
+  "@popcomputer/document-graph/turbopuffer"
+
+const Catalogue = makeTurbopufferPostgresDocumentGraph({
+  workspace: "catalogue",
+  embeddingProfile,
+  postgres: { pool, schema: "honertia_document_graph" },
+  turbopuffer: {
+    apiKey: Redacted.make(env.TURBOPUFFER_API_KEY),
+    deploymentId: "production",
+    endpoint: { _tag: "Region", region: "aws-eu-west-2" },
+    schemaGeneration: 1,
+    vectorElementType: "f16",
+  },
+})
+```
+
+An existing PostgreSQL index moves without re-embedding.
+`copyPostgresProjectionIndex` reads each stored revision with its vectors and
+publishes it through the provided `ProjectionIndexStore`. It skips revisions
+already present, so a copy can stop and resume. For a bulk copy, set
+`coalesceWrites` so concurrent publications share Turbopuffer writes, and
+`compression: true` when the copy is limited by upload bandwidth.
+
 An opt-in live provider contract covers schema creation, upsert, strong ANN and
 BM25 multi-query reads, overwrite, deletion, and disposable-namespace cleanup:
 

@@ -441,7 +441,11 @@ describe("Turbopuffer projection publication", () => {
     expect(commit).toMatchObject({ inserted: 0, updated: 1, deleted: 0 })
     expect(harness.queries).toHaveLength(0)
     const live = harness.writes[0]?.upsert_rows?.find((row) => row["is_live"] === true)
-    expect(live?.vector).toEqual([0.25, 0.75])
+    // Vectors travel as base64 little-endian float32.
+    const wire = Schema.decodeUnknownSync(Schema.String)(live?.vector)
+    const bytes = Buffer.from(wire, "base64")
+    expect([...new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4)])
+      .toEqual([0.25, 0.75])
   })
 
   test("distinguishes absent metadata from explicit null in publication identities", async () => {
@@ -525,7 +529,13 @@ describe("Turbopuffer projection publication", () => {
       full_text_search: {
         language: "english",
         tokenizer: "word_v4",
+        remove_stopwords: true,
+        stemming: true,
       },
+    })
+    expect(request?.schema?.["vector"]).toEqual({
+      type: "[2]f32",
+      ann: { distance_metric: "cosine_distance" },
     })
     expect(request?.upsert_condition).toEqual(["Or", [
       [

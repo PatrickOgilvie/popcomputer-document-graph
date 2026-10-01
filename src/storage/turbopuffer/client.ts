@@ -34,6 +34,11 @@ export interface TurbopufferClientConfig {
   /** Effect-owned retries after the initial request; defaults to two. */
   readonly retries?: number | undefined
   readonly fetch?: NonNullable<ClientOptions["fetch"]> | undefined
+  /**
+   * Gzip request bodies. Worth it where upload bandwidth, not CPU, limits
+   * bulk writes; on Workers the SDK compresses in JavaScript. Defaults off.
+   */
+  readonly compression?: boolean | undefined
 }
 
 /** Narrow provider operations used by publication, search, and administration. */
@@ -372,6 +377,7 @@ export const makeOfficialTurbopufferClient = (
     maxRetries: 0,
     timeout,
     logLevel: "off",
+    compression: config.compression ?? false,
   }
 
   if (partition.endpoint._tag === "Region") {

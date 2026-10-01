@@ -17,7 +17,6 @@ import {
   ProjectionPublicationCoordinatorFailed,
   ProjectionPublicationGenerationSchema,
   ProjectionPublicationIdSchema,
-  ProjectionPublicationPlanStale,
   ProjectionPublicationSuperseded,
   type ProjectionPublicationCoordinatorService,
   type ProjectionPublicationHead,
@@ -32,6 +31,13 @@ import {
   type IndexedRevisionSnapshot,
   type ProjectionIndexKey,
 } from "../../indexing/projection-index.js"
+import {
+  activeMatchesExpectedToken,
+  publicationOutcomeFor,
+  sameActiveIntent,
+  samePendingIntent,
+  stalePublicationPlan,
+} from "../publication-head.js"
 import type {
   DocumentGraphD1Database,
   DocumentGraphD1PreparedStatement,
@@ -126,9 +132,9 @@ export interface D1ProjectionPublicationConfig {
    * Diagnostic deadline for an unreconciled publication; defaults to 60
    * seconds. Expiration never transfers publication authority automatically.
    */
-  readonly publicationLeaseMilliseconds?: number
+  readonly publicationLeaseMilliseconds?: number | undefined
   /** Completed journal entries retained per projection; defaults to 32. */
-  readonly retainedPublicationHistory?: number
+  readonly retainedPublicationHistory?: number | undefined
 }
 
 const decodeRow = <S extends Schema.ConstraintDecoder<unknown>>(
@@ -604,13 +610,6 @@ const journalStatement = (input: {
     input.intent.payloadDigest,
   )
 
-const outcomeFor = (
-  intent: ProjectionPublicationIntent,
-): ProjectionPublicationOutcome =>
-  intent._tag === "Replace"
-    ? { _tag: "Replaced", commit: intent.commit }
-    : { _tag: "Deleted", deletion: intent.deletion }
-
 const leaseFromRow = (
   intent: ProjectionPublicationIntent,
   row: typeof BegunHeadRowSchema.Type,
@@ -620,45 +619,6 @@ const leaseFromRow = (
   generation: row.pending_generation,
   slotHighWater: row.pending_slot_high_water,
 })
-
-const sameActiveIntent = (
-  head: ProjectionPublicationHead,
-  intent: ProjectionPublicationIntent,
-): boolean =>
-  Option.isSome(head.activeMutationId) &&
-  Option.isSome(head.activePayloadDigest) &&
-  head.activeMutationId.value === intent.mutationId &&
-  head.activePayloadDigest.value === intent.payloadDigest
-
-const samePendingIntent = (
-  head: ProjectionPublicationHead,
-  intent: ProjectionPublicationIntent,
-): boolean =>
-  Option.isSome(head.pending) &&
-  head.pending.value.mutationId === intent.mutationId &&
-  head.pending.value.payloadDigest === intent.payloadDigest &&
-  head.pending.value.slotHighWater === intent.slotHighWater
-
-const activeMatchesExpectedToken = (
-  head: ProjectionPublicationHead,
-  intent: ProjectionPublicationIntent,
-): boolean =>
-  Option.match(intent.expectedToken, {
-    onNone: () => head.active._tag !== "Revision",
-    onSome: (expectedToken) =>
-      head.active._tag === "Revision" && head.active.token === expectedToken,
-  })
-
-const stalePlan = (
-  intent: ProjectionPublicationIntent,
-  currentSlotHighWater: number,
-): ProjectionPublicationPlanStale =>
-  new ProjectionPublicationPlanStale({
-    documentKey: intent.key.documentKey,
-    projection: intent.key.projection,
-    plannedSlotHighWater: intent.slotHighWater,
-    currentSlotHighWater,
-  })
 
 const makeCoordinator = (
   config: D1ProjectionPublicationConfig,
@@ -950,7 +910,7 @@ const makeCoordinator = (
         activeMatchesExpectedToken(head.value, intent) &&
         head.value.slotHighWater > intent.slotHighWater
       ) {
-        return yield* stalePlan(
+        return yield* stalePublicationPlan(
           intent,
           head.value.slotHighWater,
         )
@@ -1081,7 +1041,7 @@ const makeCoordinator = (
     if (Option.isSome(after) &&
       activeMatchesExpectedToken(after.value, intent) &&
       after.value.slotHighWater > intent.slotHighWater) {
-      return yield* stalePlan(intent, after.value.slotHighWater)
+      return yield* stalePublicationPlan(intent, after.value.slotHighWater)
     }
 
     if (Option.isSome(after) &&
@@ -1169,13 +1129,13 @@ const makeCoordinator = (
         cleanupProjectionMutationsStatement(config.database, lease.intent.key),
       ]))
 
-    if ((results[0]?.results.length ?? 0) > 0) return outcomeFor(lease.intent)
+    if ((results[0]?.results.length ?? 0) > 0) return publicationOutcomeFor(lease.intent)
 
     const [lookup] = yield* loadHeads([lease.intent.key])
     const head = lookup?.head ?? Option.none()
 
     if (Option.isSome(head) && sameActiveIntent(head.value, lease.intent)) {
-      return outcomeFor(lease.intent)
+      return publicationOutcomeFor(lease.intent)
     }
 
     return yield* new ProjectionPublicationSuperseded({

@@ -54,6 +54,16 @@ export const parseTurbopufferVectorDimensions = (
   }
 }
 
+/**
+ * Element type of the namespace's dense vectors. `f16` halves vector storage
+ * and speeds up search; it is fixed when the namespace is created.
+ */
+export const TurbopufferVectorElementTypeSchema = Schema.Literals(["f32", "f16"])
+
+/** Element type of the namespace's dense vectors. */
+export type TurbopufferVectorElementType =
+  typeof TurbopufferVectorElementTypeSchema.Type
+
 /** Turbopuffer namespace name, validated against the provider wire contract. */
 export const TurbopufferNamespaceSchema = Schema.String.pipe(
   Schema.check(Schema.isLengthBetween(1, 128)),
@@ -151,12 +161,16 @@ export const TurbopufferFilterableAttributes = Object.freeze([
   "metadata_terms",
 ] as const)
 
+// Matches PostgreSQL's `english` configuration: stemmed, without stopwords.
+// Turbopuffer defaults both off, which would make English behave like simple.
 const englishFullText = Object.freeze({
   type: "string",
   filterable: false,
   full_text_search: Object.freeze({
     language: "english" as const,
     tokenizer: "word_v4" as const,
+    remove_stopwords: true,
+    stemming: true,
   }),
 }) satisfies AttributeSchema
 
@@ -181,6 +195,7 @@ export interface TurbopufferSchemaManifest {
 /** Compile the exact schema expected by publication and retrieval adapters. */
 export const compileTurbopufferSchemaManifest = (
   dimensions: EmbeddingDimensions,
+  vectorElementType: TurbopufferVectorElementType = "f32",
 ): TurbopufferSchemaManifest => {
   const providerDimensions = parseTurbopufferVectorDimensions(dimensions)
 
@@ -189,7 +204,7 @@ export const compileTurbopufferSchemaManifest = (
     distanceMetric: "cosine_distance",
     attributes: Object.freeze({
       vector: {
-        type: `[${providerDimensions}]f32`,
+        type: `[${providerDimensions}]${vectorElementType}`,
         ann: { distance_metric: "cosine_distance" as const },
       },
       row_kind: { type: "string", filterable: true },

@@ -19,6 +19,7 @@ export type TurbopufferFilter =
   | [attribute: string, operator: "NotIn", values: Array<unknown>]
   | [attribute: string, operator: "Contains", value: unknown]
   | [attribute: string, operator: "ContainsAny", values: Array<unknown>]
+  | [attribute: string, operator: "ContainsTokenSequence", phrase: string]
   | [operator: "And", filters: Array<TurbopufferFilter>]
   | [operator: "Or", filters: Array<TurbopufferFilter>]
   | [operator: "Not", filter: TurbopufferFilter]

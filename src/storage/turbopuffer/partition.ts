@@ -11,6 +11,8 @@ import {
   TurbopufferNamespaceSchema,
   TurbopufferSchemaGenerationSchema,
   TurbopufferVectorDimensionsSchema,
+  TurbopufferVectorElementTypeSchema,
+  type TurbopufferVectorElementType,
 } from "./config.js"
 import { InvalidTurbopufferConfiguration } from "./errors.js"
 import {
@@ -128,6 +130,7 @@ const WorkspacePartitionFieldsSchema = Schema.Struct({
   endpoint: TurbopufferEndpointSchema,
   embeddingProfile: EmbeddingProfileSchema,
   schemaGeneration: TurbopufferSchemaGenerationSchema,
+  vectorElementType: TurbopufferVectorElementTypeSchema,
   identity: TurbopufferNamespaceIdentitySchema,
   namespace: TurbopufferNamespaceSchema,
   d1IndexGeneration: TurbopufferD1IndexGenerationSchema,
@@ -149,6 +152,7 @@ const expectedPartitionFields = (input: {
   readonly endpoint: TurbopufferEndpoint
   readonly embeddingProfile: EmbeddingProfile
   readonly schemaGeneration: typeof TurbopufferSchemaGenerationSchema.Type
+  readonly vectorElementType: TurbopufferVectorElementType
 }): Pick<
   WorkspacePartitionFields,
   "identity" | "namespace" | "d1IndexGeneration"
@@ -250,6 +254,8 @@ export const makeTurbopufferWorkspacePartition = (input: {
   readonly endpoint: TurbopufferEndpointInput
   readonly embeddingProfile: EmbeddingProfile
   readonly schemaGeneration: number
+  /** Dense vector element type; defaults to `f32`. Part of the identity. */
+  readonly vectorElementType?: TurbopufferVectorElementType | undefined
 }): TurbopufferWorkspacePartition => {
   const workspace = parseWorkspaceId(input.workspace)
   const deploymentId = parseDeploymentId(input.deploymentId)
@@ -267,12 +273,15 @@ export const makeTurbopufferWorkspacePartition = (input: {
     input.schemaGeneration,
   )
 
+  const vectorElementType = input.vectorElementType ?? "f32"
+
   const expected = expectedPartitionFields({
     workspace,
     deploymentId,
     endpoint,
     embeddingProfile,
     schemaGeneration,
+    vectorElementType,
   })
 
   try {
@@ -282,6 +291,7 @@ export const makeTurbopufferWorkspacePartition = (input: {
       endpoint,
       embeddingProfile,
       schemaGeneration,
+      vectorElementType,
       ...expected,
     }, { onExcessProperty: "error" })
   } catch {

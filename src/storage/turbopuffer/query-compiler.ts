@@ -238,7 +238,120 @@ const compileWeightedBm25 = (
   return ["Sum", clauses]
 }
 
-/** Compile weighted BM25 retrieval against only the projection's FTS policy. */
+/**
+ * A web-search style text query (the syntax PostgreSQL's
+ * `websearch_to_tsquery` accepts) reduced to what BM25 can evaluate.
+ */
+export interface TurbopufferTextMatch {
+  /** Every positive word, quoted or not, ranked by BM25. */
+  readonly terms: string
+  /**
+   * Alternatives a hit must satisfy, each requiring all its quoted phrases.
+   * Empty when any alternative is unquoted words, which BM25 already ranks.
+   */
+  readonly phraseAlternatives: ReadonlyArray<ReadonlyArray<string>>
+}
+
+const WordCharacter = /[\p{L}\p{N}]/u
+
+/** Parse quoted phrases, `or` alternatives, and `-` exclusions from a query. */
+export const parseTurbopufferTextMatch = (
+  query: string,
+): TurbopufferTextMatch => {
+  const terms: Array<string> = []
+  const alternatives: Array<{ phrases: Array<string>; words: number }> = [
+    { phrases: [], words: 0 },
+  ]
+
+  let index = 0
+
+  while (index < query.length) {
+    const character = query.charAt(index)
+
+    if (/\s/u.test(character)) {
+      index += 1
+      continue
+    }
+
+    const excluded = character === "-"
+    if (excluded) index += 1
+    const current = alternatives[alternatives.length - 1]
+
+    if (query.charAt(index) === "\"") {
+      const close = query.indexOf("\"", index + 1)
+      const phrase = query.slice(index + 1, close === -1 ? undefined : close).trim()
+      index = close === -1 ? query.length : close + 1
+
+      if (!excluded && WordCharacter.test(phrase) && current !== undefined) {
+        terms.push(phrase)
+        current.phrases.push(phrase)
+      }
+
+      continue
+    }
+
+    let end = index
+
+    while (end < query.length && !/[\s"]/u.test(query.charAt(end))) end += 1
+    const word = query.slice(index, end)
+    index = end
+
+    if (!excluded && word.toLowerCase() === "or") {
+      if (current !== undefined && (current.phrases.length > 0 || current.words > 0)) {
+        alternatives.push({ phrases: [], words: 0 })
+      }
+
+      continue
+    }
+
+    if (!excluded && WordCharacter.test(word) && current !== undefined) {
+      terms.push(word)
+      current.words += 1
+    }
+  }
+
+  const matched = alternatives.filter((alternative) =>
+    alternative.phrases.length > 0 || alternative.words > 0)
+
+  return {
+    terms: terms.join(" "),
+    phraseAlternatives: matched.length > 0 &&
+        matched.every((alternative) => alternative.phrases.length > 0)
+      ? matched.map((alternative) => alternative.phrases)
+      : [],
+  }
+}
+
+const compilePhraseFilter = (
+  alternatives: ReadonlyArray<ReadonlyArray<string>>,
+  policy: EnabledTextSearchPolicy,
+): TurbopufferFilter | undefined => {
+  if (alternatives.length === 0) return undefined
+  const fields = TurbopufferFullTextAttributes[policy.language]
+
+  const phraseAnywhere = (phrase: string): TurbopufferFilter => [
+    "Or",
+    [fields.context, fields.label, fields.content].map(
+      (field): TurbopufferFilter => [field, "ContainsTokenSequence", phrase],
+    ),
+  ]
+
+  return [
+    "Or",
+    alternatives.map((phrases): TurbopufferFilter => [
+      "And",
+      phrases.map(phraseAnywhere),
+    ]),
+  ]
+}
+
+/**
+ * Compile weighted BM25 retrieval against only the projection's FTS policy.
+ *
+ * BM25 ranks every positive word. When the query is made of quoted phrases,
+ * as in `"food photography" OR "recipe video"`, a hit must also contain one
+ * alternative's phrases, matching PostgreSQL's web-search semantics.
+ */
 export const compileTurbopufferTextQuery = (input: {
   readonly scope: GraphSearchScope
   readonly partition: TurbopufferQueryPartition
@@ -249,10 +362,15 @@ export const compileTurbopufferTextQuery = (input: {
   const filters = compileCommonFilter(input)
 
   if (filters === undefined) return noDocuments()
+  const match = parseTurbopufferTextMatch(input.query)
+  const phrases = compilePhraseFilter(match.phraseAlternatives, input.policy)
 
   return executableQuery({
-    rank_by: compileWeightedBm25(input.query, input.policy),
-    filters,
+    rank_by: compileWeightedBm25(
+      match.terms.length > 0 ? match.terms : input.query,
+      input.policy,
+    ),
+    filters: phrases === undefined ? filters : ["And", [filters, phrases]],
     top_k: input.candidates,
     include_attributes: [...TurbopufferSearchResultAttributes],
   })

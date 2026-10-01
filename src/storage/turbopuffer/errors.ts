@@ -20,6 +20,7 @@ export class InvalidTurbopufferConfiguration extends Schema.TaggedError<
     "publication_lease_milliseconds",
     "retained_publication_history",
     "consistency",
+    "coalesce_writes",
   ]),
   reason: Schema.Literals(["invalid_value", "mismatch"]),
 }) {}

@@ -30,6 +30,7 @@ export const updateTurbopufferNamespaceSchema = Effect.fn(
 
   const manifest = compileTurbopufferSchemaManifest(
     client.partition.embeddingProfile.dimensions,
+    client.partition.vectorElementType,
   )
 
   yield* client.updateSchema({ schema: { ...manifest.attributes } })
