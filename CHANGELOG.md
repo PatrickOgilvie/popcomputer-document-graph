@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.0 - 2026-10-02
+
+Mirror PostgreSQL projection changes into another index.
+
+### Added
+
+- Migration 0007 records every write to `projected_revisions` in a
+  `projection_changes` set, by trigger, in the writing transaction. A
+  projection keeps one row however often it changes.
+- `mirrorPostgresProjectionChanges` drains that set into any
+  `ProjectionIndexStore`, such as a Turbopuffer composition. It copies changed
+  revisions with their stored vectors, deletes revisions PostgreSQL no longer
+  holds, and clears each applied change. Failed writes stay recorded for the
+  next drain, and a change renewed during a drain is never cleared by it.
+
+### Changed
+
+- `copyPostgresProjectionIndex` compares revision hashes before reading
+  chunks, so revisions the target already holds cost one row read instead of
+  their chunks and vectors. A resumed or repeated copy is mostly row reads.
+
 ## 0.8.0 - 2026-10-01
 
 Turbopuffer retrieval with PostgreSQL topology and journal.

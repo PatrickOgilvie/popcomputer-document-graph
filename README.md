@@ -1166,6 +1166,30 @@ already present, so a copy can stop and resume. For a bulk copy, set
 `coalesceWrites` so concurrent publications share Turbopuffer writes, and
 `compression: true` when the copy is limited by upload bandwidth.
 
+To keep PostgreSQL as the index you write and Turbopuffer as the one you
+search, apply migration 0007 and drain its change set on a schedule.
+A trigger on `projected_revisions` records every changed or deleted projection
+in the writing transaction, whoever writes it. Each projection keeps one row,
+so the set never outgrows the index.
+`mirrorPostgresProjectionChanges` copies each changed revision with its stored
+vectors, deletes revisions PostgreSQL no longer holds, and clears what it
+applied:
+
+```ts
+const progress = yield* mirrorPostgresProjectionChanges({
+  pool,
+  schema: "honertia_document_graph",
+  manifest: CatalogueGraph.manifest,
+  maximumBatches: 4,
+}).pipe(Effect.provide(Catalogue.layer))
+```
+
+A failed target write stays recorded, and is listed in `progress.failures`, for
+the next drain to retry. A projection rewritten while a drain runs keeps its
+record, so the drain cannot clear a change it did not copy. Run a full
+`copyPostgresProjectionIndex` once after applying the migration, to catch
+changes made before the trigger existed.
+
 An opt-in live provider contract covers schema creation, upsert, strong ANN and
 BM25 multi-query reads, overwrite, deletion, and disposable-namespace cleanup:
 

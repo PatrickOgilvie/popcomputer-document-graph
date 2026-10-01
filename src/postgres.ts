@@ -30,10 +30,13 @@ export {
 
 export {
   copyPostgresProjectionIndex,
+  mirrorPostgresProjectionChanges,
   PostgresProjectionIndexReadFailed,
   readPostgresProjectionIndexPage,
   type PostgresProjectionIndexCursor,
   type PostgresProjectionIndexPage,
   type ProjectionIndexCopyProgress,
+  type ProjectionIndexMirrorFailure,
+  type ProjectionIndexMirrorProgress,
   type StoredProjectedRevision,
 } from "./storage/postgres/projection-index-copy.js"
