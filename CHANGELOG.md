@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.0 - 2026-10-04
+
+Document embeddings from Turbopuffer's managed models.
+
+### Added
+
+- `makeTurbopufferNativeEmbeddingProvider` embeds documents with a Turbopuffer
+  managed model, such as `qwen/qwen3-embedding-0p6b`, behind the ordinary
+  `EmbeddingProvider` seam. It writes each document to a dedicated namespace
+  under its content hash and reads the stored vector back. Content already
+  embedded by the same model is read instead of embedded again. Query vectors
+  come from a supplied `embedQuery`.
+- `InvalidTurbopufferConfiguration` reports `batch_size` and `embedding_model`.
+
 ## 0.9.0 - 2026-10-02
 
 Mirror PostgreSQL projection changes into another index.

@@ -1190,6 +1190,50 @@ record, so the drain cannot clear a change it did not copy. Run a full
 `copyPostgresProjectionIndex` once after applying the migration, to catch
 changes made before the trigger existed.
 
+### Turbopuffer native embeddings
+
+Turbopuffer can embed documents itself with a managed model.
+`makeTurbopufferNativeEmbeddingProvider` uses that model as the
+`EmbeddingProvider` for documents, so indexing, stores and mirrors are
+unchanged:
+
+```ts
+import {
+  makeOfficialTurbopufferClient,
+  makeTurbopufferNativeEmbeddingProvider,
+  makeTurbopufferWorkspacePartition,
+} from "@popcomputer/document-graph/turbopuffer"
+
+const embeddings = makeTurbopufferNativeEmbeddingProvider({
+  profile: embeddingProfile,
+  model: "qwen/qwen3-embedding-0p6b",
+  client: makeOfficialTurbopufferClient({
+    apiKey: Redacted.make(env.TURBOPUFFER_API_KEY),
+    partition: makeTurbopufferWorkspacePartition({
+      workspace: "catalogue-embeddings",
+      deploymentId: "production",
+      endpoint: { _tag: "Region", region: "aws-eu-west-2" },
+      embeddingProfile,
+      schemaGeneration: 1,
+    }),
+  }),
+  embedQuery: (query) => queryEmbeddings.embedQuery(query),
+})
+```
+
+Turbopuffer has no endpoint that only embeds. The provider writes each
+document to its own namespace under its content hash, with `embed` set on the
+text, and reads the stored vector back. Give it a namespace of its own, never a
+projection index namespace. Content the namespace already holds for the same
+model is read rather than embedded again, so a retried index costs no tokens.
+The namespace keeps the text, as Turbopuffer always does for native embeddings,
+and rejects a write for any other model.
+
+Turbopuffer embeds queries only inside its own searches, so `embedQuery`
+comes from another provider. A managed model may also be served at another
+precision than the provider that embedded existing vectors. Measure the two
+before reusing an existing `embeddingProfile` for new documents.
+
 An opt-in live provider contract covers schema creation, upsert, strong ANN and
 BM25 multi-query reads, overwrite, deletion, and disposable-namespace cleanup:
 
@@ -1199,7 +1243,9 @@ bun run test:live:turbopuffer
 
 The command requires `TURBOPUFFER_API_KEY`,
 `TURBOPUFFER_DEPLOYMENT_ID`, and exactly one of `TURBOPUFFER_REGION` or
-`TURBOPUFFER_BASE_URL`. The default test and verification commands do not make
+`TURBOPUFFER_BASE_URL`. It also embeds two documents with
+`TURBOPUFFER_EMBEDDING_MODEL`, by default `qwen/qwen3-embedding-0p6b`, in a
+namespace it deletes afterwards. The default test and verification commands do not make
 network requests, and credentials remain redacted at the test boundary.
 
 ## Grounding

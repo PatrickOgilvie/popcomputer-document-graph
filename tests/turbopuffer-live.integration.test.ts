@@ -6,7 +6,9 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Redacted, Schema } from "effect"
 import { defineEmbeddingProfile } from "../src/indexing/embedding-provider.js"
+import { makeContentHash } from "../src/document/document-identity.js"
 import { makeOfficialTurbopufferClient } from "../src/storage/turbopuffer/client.js"
+import { makeTurbopufferNativeEmbeddingProvider } from "../src/storage/turbopuffer/native-embeddings.js"
 import {
   makeTurbopufferWorkspacePartition,
   type TurbopufferEndpointInput,
@@ -299,6 +301,50 @@ if (config === undefined) {
       if (conformanceFailure !== undefined) throw conformanceFailure
 
       if (cleanupFailure !== undefined) throw cleanupFailure
+    }, 120_000)
+
+    test("embeds documents with a managed model and reads them back", async () => {
+      const profile = defineEmbeddingProfile({
+        id: "test:turbopuffer-native-embeddings",
+        version: "v1",
+        dimensions: 1_024,
+      })
+
+      const client = makeOfficialTurbopufferClient({
+        apiKey: config.apiKey,
+        partition: makeTurbopufferWorkspacePartition({
+          workspace: `live-native-embeddings-${Date.now()}-${crypto.randomUUID()}`,
+          deploymentId: config.deploymentId,
+          endpoint: config.endpoint,
+          embeddingProfile: profile,
+          schemaGeneration: 1,
+        }),
+      })
+
+      const embeddings = makeTurbopufferNativeEmbeddingProvider({
+        profile,
+        model: Bun.env.TURBOPUFFER_EMBEDDING_MODEL ?? "qwen/qwen3-embedding-0p6b",
+        client,
+        embedQuery: () => Effect.die("unused"),
+      })
+
+      const requests = ["A brand identity for a fintech", "Food photography"].map((content) => ({
+        contentHash: makeContentHash(content),
+        content,
+      }))
+
+      try {
+        // The first call creates the namespace; the second reads what it stored.
+        const first = await Effect.runPromise(embeddings.embedDocuments([requests[0]!, requests[1]!]))
+        const again = await Effect.runPromise(embeddings.embedDocuments([requests[1]!, requests[0]!]))
+
+        expect(first.map(({ contentHash }) => contentHash)).toEqual(requests.map(({ contentHash }) => contentHash))
+        expect(first.every(({ vector }) => vector.length === 1_024)).toBe(true)
+        expect(again.find(({ contentHash }) => contentHash === requests[0]!.contentHash)?.vector)
+          .toEqual(first[0]!.vector)
+      } finally {
+        await Effect.runPromise(client.destroyNamespace())
+      }
     }, 120_000)
   })
 }

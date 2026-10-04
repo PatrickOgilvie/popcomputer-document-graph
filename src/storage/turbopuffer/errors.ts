@@ -23,6 +23,8 @@ export class InvalidTurbopufferConfiguration extends Schema.TaggedError<
     "coalesce_writes",
     "chunks_per_document",
     "coalesce_searches",
+    "batch_size",
+    "embedding_model",
   ]),
   reason: Schema.Literals(["invalid_value", "mismatch"]),
 }) {}

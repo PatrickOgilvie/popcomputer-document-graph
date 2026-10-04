@@ -111,6 +111,11 @@ export {
 } from "./storage/turbopuffer/workspace.js"
 
 export {
+  makeTurbopufferNativeEmbeddingProvider,
+  type TurbopufferNativeEmbeddingConfig,
+} from "./storage/turbopuffer/native-embeddings.js"
+
+export {
   makeTurbopufferPostgresDocumentGraph,
   type TurbopufferPostgresDocumentGraph,
   type TurbopufferPostgresDocumentGraphConfig,
