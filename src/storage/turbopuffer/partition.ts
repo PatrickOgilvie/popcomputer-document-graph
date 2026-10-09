@@ -45,7 +45,7 @@ export type TurbopufferDeploymentId =
 export const TurbopufferRegionSchema = Schema.Trimmed.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(128),
-  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
 ).pipe(Schema.brand("TurbopufferRegion"))
 
 /** Explicit Turbopuffer region selected for a regional API deployment. */
@@ -110,7 +110,7 @@ export type TurbopufferEndpointInput =
 
 /** D1 coordinator generation paired with exactly one physical TP namespace. */
 export const TurbopufferD1IndexGenerationSchema = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^turbopuffer-v2-[0-9a-f]{64}$/)),
+  Schema.check(Schema.isPattern(/^turbopuffer-v2-[0-9a-f]{64}$/u)),
   Schema.brand("TurbopufferD1IndexGeneration"),
 )
 

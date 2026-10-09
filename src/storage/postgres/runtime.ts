@@ -107,7 +107,7 @@ class InvalidStoredState extends Error {
 }
 
 const RevisionWithChunkRowSchema = Schema.Struct({
-  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/)),
+  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/u)),
   revision_hash: ProjectionRevisionHashSchema,
   embedding_profile_id: EmbeddingProfileIdSchema,
   embedding_profile_version: EmbeddingProfileVersionSchema,
@@ -127,7 +127,7 @@ const RequestedRevisionWithChunkRowSchema = Schema.Struct({
     Schema.isInt(),
     Schema.isGreaterThanOrEqualTo(1),
   ),
-  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/)),
+  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/u)),
   revision_hash: ProjectionRevisionHashSchema,
   embedding_profile_id: EmbeddingProfileIdSchema,
   embedding_profile_version: EmbeddingProfileVersionSchema,
@@ -149,11 +149,11 @@ const ReusableChunkRowSchema = Schema.Struct({
 })
 
 const RevisionTokenRowSchema = Schema.Struct({
-  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/)),
+  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/u)),
 })
 
 const CurrentRevisionRowSchema = Schema.Struct({
-  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/)),
+  revision_token: Schema.String.check(Schema.isPattern(/^[1-9][0-9]*$/u)),
   revision_hash: ProjectionRevisionHashSchema,
   embedding_profile_id: EmbeddingProfileIdSchema,
   embedding_profile_version: EmbeddingProfileVersionSchema,
@@ -161,8 +161,8 @@ const CurrentRevisionRowSchema = Schema.Struct({
 })
 
 const DeletionCountRowSchema = Schema.Struct({
-  revision_count: Schema.String.check(Schema.isPattern(/^[0-9]+$/)),
-  chunk_count: Schema.String.check(Schema.isPattern(/^[0-9]+$/)),
+  revision_count: Schema.String.check(Schema.isPattern(/^[0-9]+$/u)),
+  chunk_count: Schema.String.check(Schema.isPattern(/^[0-9]+$/u)),
 })
 
 const SearchCandidateRowSchema = Schema.Struct({
@@ -203,7 +203,7 @@ const GraphNodeKeyRowSchema = Schema.Struct({
 })
 
 const DeletedGraphEdgeCountRowSchema = Schema.Struct({
-  deleted_count: Schema.String.check(Schema.isPattern(/^[0-9]+$/)),
+  deleted_count: Schema.String.check(Schema.isPattern(/^[0-9]+$/u)),
 })
 
 type RequestedRevisionWithChunkRow = Schema.Codec.Encoded<

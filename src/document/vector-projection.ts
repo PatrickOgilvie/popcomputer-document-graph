@@ -14,7 +14,7 @@ import {
 export const VectorProjectionIdSchema = Schema.Trimmed.pipe(
   Schema.check(Schema.isNonEmpty()),
   Schema.check(Schema.isMaxLength(100)),
-  Schema.check(Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/)),
+  Schema.check(Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u)),
 )
 
 /** Stable version for one semantic projection and its text policy. */
@@ -23,7 +23,7 @@ export const VectorProjectionVersionSchema =
     Schema.check(Schema.isNonEmpty()),
     Schema.check(Schema.isMaxLength(100)),
     Schema.check(
-      Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+      Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u),
     ),
   )
 

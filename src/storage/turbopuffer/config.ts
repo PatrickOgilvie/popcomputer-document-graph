@@ -66,8 +66,8 @@ export type TurbopufferVectorElementType =
 
 /** Turbopuffer namespace name, validated against the provider wire contract. */
 export const TurbopufferNamespaceSchema = Schema.String.pipe(
-  Schema.check(Schema.isLengthBetween(1, 128)),
-  Schema.check(Schema.isPattern(/^[A-Za-z0-9._-]+$/)),
+  Schema.check(Schema.isBetweenLength(1, 128)),
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9._-]+$/u)),
   Schema.brand("TurbopufferNamespace"),
 )
 

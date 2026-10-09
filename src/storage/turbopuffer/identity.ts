@@ -73,7 +73,7 @@ export type TurbopufferPhysicalRowId = typeof TurbopufferPhysicalRowIdSchema.Typ
 
 /** Fixed-width identity used when deriving a namespace from logical scope. */
 export const TurbopufferNamespaceIdentitySchema = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+  Schema.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
   Schema.brand("TurbopufferNamespaceIdentity"),
 )
 

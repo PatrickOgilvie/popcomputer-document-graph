@@ -80,7 +80,7 @@ export const GraphRelationIdSchema = Schema.Trimmed.check(
   Schema.isNonEmpty(),
 ).pipe(
   Schema.check(Schema.isMaxLength(100)),
-  Schema.check(Schema.isPattern(/^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$/)),
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$/u)),
 )
 
 /** Version of the persisted semantics for one directed relation. */
@@ -88,7 +88,7 @@ export const GraphRelationVersionSchema = Schema.Trimmed.check(
   Schema.isNonEmpty(),
 ).pipe(
   Schema.check(Schema.isMaxLength(100)),
-  Schema.check(Schema.isPattern(/^[a-z0-9]+([._-][a-z0-9]+)*$/)),
+  Schema.check(Schema.isPattern(/^[a-z0-9]+([._-][a-z0-9]+)*$/u)),
 )
 
 /** Maximum number of neighbours returned by one bounded traversal. */
