@@ -5,7 +5,7 @@ import type { ContentHash } from "../document/document-identity.js"
 export const EmbeddingProfileIdSchema = Schema.Trimmed.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(200),
-  Schema.isPattern(/^[a-z0-9]+(?:[._:/-][a-z0-9]+)*$/),
+  Schema.isPattern(/^[a-z0-9]+(?:[._:/-][a-z0-9]+)*$/u),
 ).pipe(
   Schema.brand("EmbeddingProfileId"),
 )
@@ -15,7 +15,7 @@ export const EmbeddingProfileVersionSchema =
   Schema.Trimmed.check(
     Schema.isNonEmpty(),
     Schema.isMaxLength(100),
-    Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/),
+    Schema.isPattern(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u),
   ).pipe(
     Schema.brand("EmbeddingProfileVersion"),
   )

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+Stable Effect v4.
+
+### Breaking changes
+
+- The `effect` peer dependency is now `^4.0.0` instead of `^4.0.0-rc.109`.
+  Effect v4 release candidates are no longer supported; upgrade to Effect
+  `4.0.0` or later.
+
+### Maintenance
+
+- Developed and tested against `effect@4.0.2` and `@effect/vitest@4.0.2`.
+- `Sha256HexSchema`, the identity schemas built on it, and
+  `TurbopufferNamespaceSchema` use `Schema.isBetweenLength`, the stable name of
+  `Schema.isLengthBetween`. Validation and its messages are unchanged.
+- Identifier, digest, and numeric-string patterns use Unicode (`u`) regular
+  expressions, so they keep appearing as `pattern` when consumers generate JSON
+  Schema from them. Effect 4.0.2 exports a pattern only for Unicode
+  expressions; matching is unchanged.
+
+No schema migrations or reindexing are required.
+
 ## 0.10.0 - 2026-10-04
 
 Document embeddings from Turbopuffer's managed models.

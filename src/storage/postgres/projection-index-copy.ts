@@ -377,7 +377,7 @@ const ChangeRowSchema = Schema.Struct({
   document_key: DocumentKeySchema,
   projection_id: Schema.String,
   // bigint, kept as text so it round-trips exactly.
-  change_sequence: Schema.String.check(Schema.isPattern(/^[0-9]+$/)),
+  change_sequence: Schema.String.check(Schema.isPattern(/^[0-9]+$/u)),
 })
 
 type ChangeRow = typeof ChangeRowSchema.Type

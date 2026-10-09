@@ -26,7 +26,7 @@ export type ProjectionMutationId = typeof ProjectionMutationIdSchema.Type
 
 /** Digest of every normalized physical row, including vector bytes. */
 export const ProjectionPayloadDigestSchema = Schema.String.check(
-  Schema.isPattern(/^[0-9a-f]{64}$/),
+  Schema.isPattern(/^[0-9a-f]{64}$/u),
 ).pipe(Schema.brand("ProjectionPayloadDigest"))
 
 /** Digest of every normalized physical row, including vector bytes. */

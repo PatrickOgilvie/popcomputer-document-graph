@@ -10,8 +10,8 @@ import type {
 
 /** Lowercase SHA-256 digest encoded as 64 hexadecimal characters. */
 export const Sha256HexSchema = Schema.String.pipe(
-  Schema.check(Schema.isLengthBetween(64, 64)),
-  Schema.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+  Schema.check(Schema.isBetweenLength(64, 64)),
+  Schema.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
 )
 
 /** Stable storage identity for one graph document node. */

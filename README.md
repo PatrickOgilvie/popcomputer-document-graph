@@ -44,13 +44,12 @@ documents and files, authorization, and public response shapes.
 ## Installation
 
 ```sh
-bun add @popcomputer/document-graph effect@4.0.0-rc.109 pg
+bun add @popcomputer/document-graph effect@4 pg
 ```
 
-The package currently targets Effect `4.0.0-rc.109`. The published
-`@popcomputer/web@0.3.0-rc.1` package still declares an Effect v3 peer, so its
-integration needs a v4-compatible release before the two packages can be used
-together. `pg` is needed when composing the included PostgreSQL adapter.
+The package requires stable Effect v4 (`effect@^4.0.0`) and is tested against
+Effect `4.0.2`. Effect v4 release candidates are not supported. `pg` is needed
+when composing the included PostgreSQL adapter.
 
 For PostgreSQL, apply
 [`migrations/postgres/0001_initial.sql`](./migrations/postgres/0001_initial.sql)
@@ -379,10 +378,10 @@ request without re-embedding content.
 ## Web integrations
 
 Graph operations remain ordinary Effects, so applications can place their HTTP
-boundary around indexing and search without a transport-specific wrapper. The
-published `@popcomputer/web@0.3.0-rc.1` package still requires Effect v3, so the
-former Web action example is intentionally not included in this v4 release. It
-can return once `@popcomputer/web` publishes an Effect v4-compatible version.
+boundary around indexing and search without a transport-specific wrapper.
+`@popcomputer/web` has declared an Effect v4 peer since 0.4.0, but the former
+Web action example, removed while that package required Effect v3, has not been
+restored yet.
 
 ## Design model
 
